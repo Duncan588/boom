@@ -101,6 +101,34 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- 红包：/hongbao 发出的领取卡片。
+-- amount_total 是总额（一次性从发包人扣除），mode 决定每个领取者拿多少：
+--   even  平均分 —— 每人 total/slots（四舍五入到分，余数留给下一位）
+--   random 随机分 —— 从剩余池子里抽，首领者额外拿余数，保证「发出的=领完的」
+CREATE TABLE IF NOT EXISTS redpackets (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  creator_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel_id   TEXT    NOT NULL,
+  message_id   TEXT,
+  amount_total REAL    NOT NULL,
+  slots        INTEGER NOT NULL,
+  mode         TEXT    NOT NULL DEFAULT 'even',
+  claimed      INTEGER NOT NULL DEFAULT 0,
+  claimed_sum  REAL    NOT NULL DEFAULT 0,
+  status       TEXT    NOT NULL DEFAULT 'open',   -- open | done
+  created_at   TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS redpacket_claims (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  redpacket_id INTEGER NOT NULL REFERENCES redpackets(id) ON DELETE CASCADE,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount       REAL    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  -- 一个人只能领一次 —— 领取与派彩在同一事务里，靠这个唯一索引兜底
+  UNIQUE(redpacket_id, user_id)
+);
+
 -- 登录会话持久化：进程重启后登录态不丢（之前只放内存 Map）
 CREATE TABLE IF NOT EXISTS sessions (
   sid        TEXT PRIMARY KEY,

@@ -232,11 +232,40 @@ server.listen(PORT, () => {
   const { daily } = require('./daily-activity');
   seedDailySettings();
   daily.start();
+  startBot();
 });
+
+/* ---------- Discord Bot（slash 指令） ----------
+ *
+ * 之前 /balance 点了没反应，是因为只做了 REST 调用（发消息、建活动），
+ * 却没有连 Gateway —— 交互事件走 Gateway，不连就永远收不到。
+ * 指令在后台是注册好的，所以「指令存在但无效」，很容易误判成配置问题。
+ */
+function startBot() {
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) {
+    console.log('  Discord Bot: 未配置 DISCORD_BOT_TOKEN，slash 指令不可用');
+    return;
+  }
+  const { DiscordBot } = require('./gateway');
+  const { buildCommands } = require('./commands');
+
+  const activityUrl = process.env.PUBLIC_URL || process.env.APP_URL || '';
+  let bot;
+  const commands = buildCommands({
+    get bot() { return bot; },
+    activityUrl,
+  });
+  bot = new DiscordBot(token, { commands, activityUrl });
+  bot.start();
+  global.__bot = bot;   // 调试/测试用
+  return bot;
+}
 
 function shutdown() {
   console.log('\n正在关闭...');
   engine.stop();
+  try { if (global.__bot) global.__bot.stop(); } catch (_) {}
   try { wss.close(); } catch (_) {}
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000);
