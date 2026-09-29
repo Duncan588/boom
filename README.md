@@ -44,7 +44,7 @@
 
 **游戏**
 - 10 秒下单 + 5 秒封盘，服务端绝对时间戳（`betEndAt` / `lockEndAt`）驱动倒计时
-- 资金池反推赔率，支持四种赔率模式
+- 资金池反推赔率，支持五种赔率模式（新增三段加权 + 瞬爆）
 - 中途加入自动恢复当前阶段 / 倍率 / 已飞时间 / 曲线 / 火箭 / 下注列表
 - 每局每人仅一次下注，SQLite 事务保证不重复扣款
 - Canvas 每 100ms 生长曲线，动态秒轴 + 倍率轴，火箭贴曲线尖
@@ -354,6 +354,34 @@ boom/
 
 1.00-1000.00x 全区间往返误差 < 1e-2（整数毫秒舍入）。
 
+**赔率模式 5 · 三段加权 + 瞬爆**（当前默认）
+
+模式 4（区间随机）是**均匀分布** —— 1.10x 和 50x 出现概率完全相同。
+把区间配成 `1.10–50` 会导致 81.8% 的局超过 10x、41% 超过 30x，
+玩家每局都在 25x 附近逃跑，10 局净赚 5 倍本金。
+
+模式 5 改成四段加权，先按权重决定落在哪一段，段内再均匀取值：
+
+| 段 | 权重 | 范围 | 作用 |
+|---|---|---|---|
+| 瞬爆 | 5% | 1.00–1.04x | 刚起飞就没（绕过 `min_rate` 与最低飞行时长） |
+| 低 | 22% | 1.10–1.70x | 甜头区，保守玩家有赚头 |
+| 中 | 48% | 6.00–15.00x | 主赚区 |
+| 高 | 25% | 15.00–50.00x | 爆发区 |
+
+20 万局实测：**中位 10.31x**，平均 13.51x，10x+ 占 51.6%，瞬爆 5.1%。
+玩家视角：2x 就逃成功 72.9%，按住到 10x 成功 51.6%。
+
+后台「设置」页有全部 11 个参数，改完**实时预览爆点分布**，不用跑一天才知道效果。
+
+> ⚠️ `DEFAULT_SETTINGS` 只在 settings 表为空时生效，**已有数据库不会自动更新**。
+> 升级已有实例必须显式执行迁移：
+> ```bash
+> DB_FILE=/path/to/baodian.db node scripts/migrate-odds5.js            # 只看
+> DB_FILE=/path/to/baodian.db node scripts/migrate-odds5.js --apply    # 写参数
+> DB_FILE=/path/to/baodian.db node scripts/migrate-odds5.js --apply --force  # 连赔率模式一起切
+> ```
+
 **WebSocket 协议**（端口 `WS_PORT`，路径 `/ws`）：
 
 | 消息 | 方向 | 说明 |
@@ -380,8 +408,10 @@ boom/
 node test/full.js              # 完整回归
 node test/e2e.js               # 端到端
 node test/odds.js              # 赔率计算
+node test/odds-weighted.js     # 模式 5 分布 + 瞬爆（20 万局）
 
 # 以下需要服务已启动
+node test/e2e-odds-e2e.js      # 真实游戏循环跑 10 局，验证爆点分布
 node scripts/test-money-conservation.js   # 结算守恒（钱不能凭空产生）
 node scripts/test-escape-broadcast.js     # 逃跑事件只通知本人
 ```

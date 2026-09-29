@@ -173,7 +173,7 @@ class Engine {
     //
     // 100x = 73.8s（实测），所以活动封顶 100x 时上限必须 > 73.8s，
     // 否则高倍局会被静默截断成 90s 但倍率仍显示 100x（显示与结算不一致）。
-    const rawMs = flightMs(rate);
+    const rawMs = flightMs(rate, { instant: dec.fast });
     const CAP_MS = Number(cfg.max_flight_ms) || 120000;   // 默认 120s
     const ms = Math.min(rawMs, CAP_MS);
     if (rawMs > CAP_MS) {

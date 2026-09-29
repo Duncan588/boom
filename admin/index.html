@@ -145,6 +145,15 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
 .login h1 { font-size: 22px; font-weight: 800; text-align: center; margin-bottom: 20px; }
 .login .f { margin-bottom: 12px; }
 .login .inp { width: 100%; }
+/* 模式 5 加权参数块的标题与说明（admin 专用） */
+.panel-sub {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin: 14px 0 8px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.panel-sub b { font-size: 12.5px; color: var(--fg); }
+.hint { font-size: 11.5px; color: var(--fg-3); line-height: 1.6; }
+.hint b { color: var(--fg); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -298,7 +307,8 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f">
           <label>赔率模式</label>
           <select class="inp" id="s_mode">
-            <option value="4">4 · 区间随机（默认）</option>
+            <option value="5">5 · 加权分布（推荐：平时小赢，偶尔爆发）</option>
+            <option value="4">4 · 区间随机（均匀分布，慎用）</option>
             <option value="1">1 · 赢（池子越大爆点越高）</option>
             <option value="2">2 · 输（压低爆点）</option>
             <option value="3">3 · 平衡（抽水后维持）</option>
@@ -308,6 +318,30 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f"><label>最低爆点 min_rate（决定最短逃跑窗口）</label><input class="inp" id="s_min" type="number" step="0.01"></div>
         <div class="f"><label>最高爆点 max_rate</label><input class="inp" id="s_max" type="number" step="0.01"></div>
       </div>
+
+      <!-- 模式 5：三段加权分布。模式 4 是均匀分布（1.1x 和 50x 概率一样），
+           配成宽区间会导致高倍率局过多；模式 5 才是「平时小赢、偶尔来一发大的」。 -->
+      <div class="panel-sub" id="w5Panel">
+        <b>模式 5 · 加权分布</b>
+        <span class="hint">按权重决定落在哪一段倍率，段内再随机。权重不必等于 100，按比例分配即可。<b>瞬爆</b>命中时火箭刚起飞就炸（约 0.2 秒），且不受最低爆点与最低飞行时长保护。</span>
+      </div>
+      <div class="row">
+        <div class="f"><label>低段权重 w_low（%）</label><input class="inp" id="s_wlow" type="number" min="0" step="1"></div>
+        <div class="f"><label>中段权重 w_mid（%）</label><input class="inp" id="s_wmid" type="number" min="0" step="1"></div>
+        <div class="f"><label>高段权重 w_high（%）</label><input class="inp" id="s_whigh" type="number" min="0" step="1"></div>
+        <div class="f"><label>瞬爆权重 w_boom（%）</label><input class="inp" id="s_wboom" type="number" min="0" step="1"></div>
+      </div>
+      <div class="row">
+        <div class="f"><label>低段下限</label><input class="inp" id="s_wlomin" type="number" step="0.01"></div>
+        <div class="f"><label>低段上限</label><input class="inp" id="s_wlomax" type="number" step="0.01"></div>
+        <div class="f"><label>中段下限</label><input class="inp" id="s_wmidmin" type="number" step="0.01"></div>
+        <div class="f"><label>中段上限</label><input class="inp" id="s_wmidmax" type="number" step="0.01"></div>
+        <div class="f"><label>高段下限</label><input class="inp" id="s_whimin" type="number" step="0.01"></div>
+        <div class="f"><label>高段上限</label><input class="inp" id="s_whimax" type="number" step="0.01"></div>
+        <div class="f"><label>瞬爆上限（1.00 ~ 此值）</label><input class="inp" id="s_wboommax" type="number" step="0.01"></div>
+      </div>
+      <div id="w5Preview" class="hint" style="margin:6px 0 2px"></div>
+
       <div class="row">
         <div class="f"><label>区间下限 band_min</label><input class="inp" id="s_bmin" type="number" step="0.01"></div>
         <div class="f"><label>区间上限 band_max</label><input class="inp" id="s_bmax" type="number" step="0.01"></div>
@@ -692,13 +726,26 @@ function loadSettings(){
     $('#s_signup').value=s.signup_bonus||500;
     $('#s_announce').value=s.announce||'';
     // 赔率
-    $('#s_mode').value=s.odds_mode||'4';
+    $('#s_mode').value=s.odds_mode||'5';
     $('#s_oddsval').value=s.odds_value||0;
     $('#s_min').value=s.min_rate||1.10;
-    $('#s_max').value=s.max_rate||1000;
+    $('#s_max').value=s.max_rate||50;
     $('#s_bmin').value=s.band_min||1.10;
     $('#s_bmax').value=s.band_max||3.00;
     $('#s_baserand').value=s.base_random||0.90;
+    // 模式 5 加权参数
+    $('#s_wlow').value=s.w_low!=null?s.w_low:22;
+    $('#s_wmid').value=s.w_mid!=null?s.w_mid:48;
+    $('#s_whigh').value=s.w_high!=null?s.w_high:25;
+    $('#s_wboom').value=s.w_boom!=null?s.w_boom:5;
+    $('#s_wboommax').value=s.w_boom_max||1.04;
+    $('#s_wlomin').value=s.w_lo_min||1.10;
+    $('#s_wlomax').value=s.w_lo_max||1.70;
+    $('#s_wmidmin').value=s.w_mid_min||6.00;
+    $('#s_wmidmax').value=s.w_mid_max||15.00;
+    $('#s_whimin').value=s.w_high_min||15.00;
+    $('#s_whimax').value=s.w_high_max||50.00;
+    syncW5();
     $('#s_rake').value=s.rake_percent||0.03;
     $('#s_pool').value=s.pool_balance||0;
     $('#s_rmin').value=s.robot_bet_min||10;
@@ -714,6 +761,81 @@ $('#btnSaveSet').onclick=function(){
     site_name:$('#s_name').value, signup_bonus:$('#s_signup').value, announce:$('#s_announce').value
   }).then(function(){toast('站点设置已保存','ok');loadStats();});
 };
+// 模式 5 参数块：仅在选中模式 5 时显示，并在改参数时实时预览分布。
+// 后台改赔率是「盲调」—— 填完数字才知道效果。这里直接算出爆点分布，
+// 免得配完跑一天才发现高倍率局还是太多。
+function syncW5(){
+  var on = $('#s_mode').value === '5';
+  $('#w5Panel').style.display = on ? '' : 'none';
+  ['s_wlow','s_wmid','s_whigh','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax']
+    .forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) el.closest('.f').style.display = on ? '' : 'none';
+    });
+  if (!on) return;
+
+  var num = function(id, d){ var v = parseFloat($('#'+id).value); return isFinite(v) && v > 0 ? v : d; };
+  var wb = num('s_wboom', 5);
+  var wl = num('s_wlow',22), wm = num('s_wmid',48), wh = num('s_whigh',25);
+  var boomMax = Math.max(1.001, num('s_wboommax', 1.04));
+  var loMin = num('s_wlomin',1.10), loMax = Math.max(loMin, num('s_wlomax',1.70));
+  var mdMin = num('s_wmidmin',6.00), mdMax = Math.max(mdMin, num('s_wmidmax',15.00));
+  var hiMin = num('s_whimin',15.00), hiMax = Math.max(hiMin, num('s_whimax',50.00));
+  var minRate = num('s_min',1.10), maxRate = Math.max(minRate, num('s_max',50));
+
+  var total = wb + wl + wm + wh;
+  if (total <= 0) { $('#w5Preview').innerHTML = '<span style="color:var(--err)">权重全为 0，无法生成爆点</span>'; return; }
+
+  // 与 server/game-logic.js weightedRate() 完全一致的四段取法（含瞬爆）
+  var N = 20000;
+  var b = {'瞬爆':0,'1.1-2x':0,'2-6x':0,'6-10x':0,'10-15x':0,'15x+':0};
+  var over10 = 0, sum = 0, sorted = [];
+  for (var i = 0; i < N; i++) {
+    var r = Math.random() * total, v;
+    if (r < wb) v = 1.00 + Math.random() * (boomMax - 1.00);
+    else if (r < wb + wl) v = loMin + Math.random() * (loMax - loMin);
+    else if (r < wb + wl + wm) v = mdMin + Math.random() * (mdMax - mdMin);
+    else v = hiMin + Math.random() * (hiMax - hiMin);
+    // 瞬爆段在引擎里会绕过 min_rate（decideRate 直接 return，不走 clamp），
+    // 预览必须照做，否则会显示成被 min_rate 顶到下限、看起来像「没生效」。
+    if (r < wb) v = Math.max(1, Math.min(v, maxRate));
+    else { if (v < minRate) v = minRate; if (v > maxRate) v = maxRate; }
+    sum += v; sorted.push(v);
+    if (v >= 10) over10++;
+    if (v < 1.05) b['瞬爆']++;
+    else if (v < 2) b['1.1-2x']++;
+    else if (v < 6) b['2-6x']++;
+    else if (v < 10) b['6-10x']++;
+    else if (v < 15) b['10-15x']++;
+    else b['15x+']++;
+  }
+  sorted.sort(function(a, x){ return a - x; });
+  var avg = sum / N, med = sorted[Math.floor(N/2)];
+  var over10p = over10 / N * 100, boomp = b['瞬爆'] / N * 100;
+  var flee2 = sorted.filter(function(v){ return v > 2; }).length / N * 100;
+  var bars = Object.keys(b).map(function(k){
+    var p = b[k] / N * 100;
+    return '<span style="display:inline-block;margin-right:12px">' + k + ' ' + p.toFixed(1) + '%</span>';
+  }).join('');
+
+  var notes = [];
+  if (med < 3 || med > 30) notes.push('<span style="color:var(--fg-3)">中位 ' + med.toFixed(1) + 'x 偏离常规区间</span>');
+  if (over10p > 70) notes.push('<span style="color:var(--err)">⚠ 10x+ 超过 70%，赢率很高</span>');
+  if (boomp > 15) notes.push('<span style="color:var(--err)">⚠ 瞬爆超过 15%，挫败感强</span>');
+  if (!notes.length) notes.push('<span style="color:var(--ok)">分布合理</span>');
+
+  $('#w5Preview').innerHTML =
+    '预览（2 万次模拟）　中位 <b>' + med.toFixed(2) + 'x</b>　平均 <b>' + avg.toFixed(2) + 'x</b>　' +
+    '瞬爆 <b>' + boomp.toFixed(1) + '%</b>　2x 逃成功 <b>' + flee2.toFixed(1) + '%</b>　' + notes.join('　') +
+    '<br>' + bars;
+}
+$('#s_mode').onchange = syncW5;
+['s_wlow','s_wmid','s_whigh','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax','s_min','s_max']
+  .forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('input', syncW5);
+  });
+
 $('#btnSaveOdds').onclick=function(){
   call('/admin/api/settings',{
     odds_mode:$('#s_mode').value, odds_value:$('#s_oddsval').value,
@@ -721,6 +843,11 @@ $('#btnSaveOdds').onclick=function(){
     band_min:$('#s_bmin').value, band_max:$('#s_bmax').value,
     base_random:$('#s_baserand').value, rake_percent:$('#s_rake').value,
     pool_balance:$('#s_pool').value,
+    w_low:$('#s_wlow').value, w_mid:$('#s_wmid').value, w_high:$('#s_whigh').value,
+    w_lo_min:$('#s_wlomin').value, w_lo_max:$('#s_wlomax').value,
+    w_mid_min:$('#s_wmidmin').value, w_mid_max:$('#s_wmidmax').value,
+    w_high_min:$('#s_whimin').value, w_high_max:$('#s_whimax').value,
+    w_boom:$('#s_wboom').value, w_boom_max:$('#s_wboommax').value,
     robot_bet_min:$('#s_rmin').value, robot_bet_max:$('#s_rmax').value
   }).then(function(r){
     if(r.error)toast(r.error,'err'); else toast('赔率设置已保存，下一局生效','ok');
