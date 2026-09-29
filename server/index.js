@@ -99,6 +99,14 @@ wss.on('connection', (ws, req) => {
         flightMs: flightMs,
         flightStart: flightStart,
         elapsedSec: elapsedSec,
+        // ⚠️ 必须带绝对截止时间。缺了它，onJoinCurrent 会退回
+        // 「Date.now() + 10000」自己估倒计时 —— 用户反馈「刷新后没有倒计时」。
+        betEndAt: cur.betEndAt,
+        lockEndAt: cur.lockEndAt,
+        // ⚠️ 必须带上「我自己在这局下注了没」。缺了它，刷新后的前端
+        // hasBet 恒为 false → 按钮显示「未下注」且点击走下注分支 →
+        // 服务端返回「本期已下注」→ 用户反馈「下注后无法逃跑」。
+        hasBet: engine.hasBetInRound ? engine.hasBetInRound(ws.uid) : false,
         // 已产生的下注列表，让中途加入的玩家也能看到本局谁下了多少
         bets: engine.currentBets ? engine.currentBets() : [],
       };

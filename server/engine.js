@@ -316,6 +316,20 @@ class Engine {
     }));
   }
 
+  /**
+   * 这个用户在当前局是否已下注。
+   *
+   * 【为什么必须有】前端刷新/中途加入时 hasBet 恒为 false（内存态丢失），
+   * 按钮会显示「未下注」且点击走下注分支 → 服务端返回「本期已下注」，
+   * 用户看到的现象是「下注后无法逃跑」。WS 快照带上这个标记即可恢复。
+   */
+  hasBetInRound(userId) {
+    if (!this.current || !userId) return false;
+    const row = db.get().prepare('SELECT 1 AS x FROM bets WHERE round_id = ? AND user_id = ? LIMIT 1')
+      .get(this.current.id, userId);
+    return !!row;
+  }
+
   /** 逃跑 */
   escape(userId, roundId) {
     if (!this.current || this.current.id !== roundId || this.current.status !== 'flying') {

@@ -527,6 +527,34 @@
 .act-btn.wait { background: var(--surface-2); color: var(--fg-3); box-shadow: none; }
 .act-btn.done { background: linear-gradient(135deg,#4ED97A,var(--green)); color: #fff; }
 
+/* ⚠️ 移动端「灰色按钮一点就变黄」的修复。
+ *
+ * 原因：base.css 里 `.btn:hover:not(:disabled){ background:rgba(255,255,255,.12) }`。
+ * 手机上「点一下」也会触发 :hover，并且要等下一次点击别处才消失 —— 表现为
+ * 「灰色按钮按下的瞬间变成黄/白色」。而 `.btn:hover:not(:disabled)` 的
+ * 特异度 (0,2,1) 高于 `.act-btn.cash` 的 (0,2,0)，所以会盖掉状态色。
+ *
+ * 修法：状态色的 hover/active 变体补齐（特异性 (0,3,0) 稳赢），
+ * 并且在触摸设备上直接禁掉 hover —— 触摸没有「悬停」语义。 */
+.act-btn.bet:hover:not(:disabled)  { background: linear-gradient(135deg, var(--blurple-hi), var(--blurple) 55%, var(--blurple-lo)); }
+.act-btn.cash:hover:not(:disabled) { background: linear-gradient(135deg, #FFD97A, var(--qun) 50%, #E8A317); }
+.act-btn.wait:hover:not(:disabled) { background: var(--surface-2); }
+.act-btn.done:hover:not(:disabled) { background: linear-gradient(135deg,#4ED97A,var(--green)); }
+.act-btn.bet:active:not(:disabled)  { transform: scale(.96); }
+.act-btn.cash:active:not(:disabled) { transform: scale(.96); }
+.act-btn.wait:active:not(:disabled) { transform: scale(.96); }
+.act-btn.done:active:not(:disabled) { transform: scale(.96); }
+
+@media (hover: none) {
+  /* 触摸设备：点下去也不变色，视觉反馈交给 :active 的 scale */
+  .btn:hover:not(:disabled) { background: inherit; }
+  .btn:hover:not(:disabled) * { color: inherit; }
+  .act-btn.bet:hover:not(:disabled)  { background: linear-gradient(135deg, var(--blurple-hi), var(--blurple) 55%, var(--blurple-lo)); }
+  .act-btn.cash:hover:not(:disabled) { background: linear-gradient(135deg, #FFD97A, var(--qun) 50%, #E8A317); }
+  .act-btn.wait:hover:not(:disabled) { background: var(--surface-2); }
+  .act-btn.done:hover:not(:disabled) { background: linear-gradient(135deg,#4ED97A,var(--green)); }
+}
+
 /* ---------- 底部导航 ---------- */
 .nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;

@@ -776,7 +776,10 @@
    */
   function onJoinCurrent(c) {
     S.round = c.gid;
-    S.hasBet = false;
+    // ⚠️ hasBet 必须从服务端快照恢复。刷新/中途加入时内存态已丢，
+    // 若不恢复：飞行中按钮显示「未下注」且点击走【下注】分支 →
+    // 服务端返回「本期已下注」→ 用户反馈「下注后无法逃跑」。
+    S.hasBet = !!c.hasBet;
     S.escDone = false;
     if (c.jackpot != null) $('#jackpot').textContent = fmtC(c.jackpot);
 
@@ -806,7 +809,11 @@
         chart.setState({ status: 'flying', sec: c.elapsedSec || 0, scale: SC });
       }
     } else {
-      setPhase(c.status === 'betting' ? 'betting' : (c.status === 'flying' ? 'flying' : c.status));
+      // ⚠️ 必须把服务端的绝对截止时间传下去。缺了它 setPhase 会退回
+      // 「Date.now() + 10000」自己估 —— 用户反馈「刷新后没有倒计时」。
+      if (c.status === 'betting') setPhase('betting', c.betEndAt);
+      else if (c.status === 'locked' || c.status === 'betting-lock') setPhase('betting-lock', c.lockEndAt);
+      else setPhase(c.status);
     }
     setBetBtn();
   }
