@@ -51,7 +51,11 @@ async function listCurrent(scopeId) {
   const curNames = new Set(current.map((c) => c.name));
   const defNames = new Set(defs.map((c) => c.name));
 
-  for (const n of curNames) if (!defNames.has(n)) console.log(`  删除  /${n}`);
+  for (const n of curNames) {
+    if (defNames.has(n)) continue;
+    if (global && n === 'launch') { console.log('  保留  /launch（Discord 强制的 Entry Point，不可删）'); continue; }
+    console.log(`  删除  /${n}`);
+  }
   for (const d of defs) {
     if (!curNames.has(d.name)) { console.log(`  新增  /${d.name}`); continue; }
     const c = current.find((x) => x.name === d.name);
@@ -67,10 +71,16 @@ async function listCurrent(scopeId) {
   const path = scopeId
     ? `/applications/${CLIENT_ID}/guilds/${scopeId}/commands`
     : `/applications/${CLIENT_ID}/commands`;
+  // 全局作用域下 /launch 是 Discord 强制的「Entry Point」指令，
+  // 批量 PUT 里不能删掉它 —— 必须原样带回，否则 HTTP 400 (code 50240)。
+  // 保留原 body（保留它原有的 integration_types 等字段），只改我们自己的指令。
+  const payload = global
+    ? [...current.filter((c) => c.name === 'launch'), ...defs]
+    : defs;
   const r = await fetch('https://discord.com/api/v10' + path, {
     method: 'PUT',
     headers: { Authorization: 'Bot ' + TOKEN, 'Content-Type': 'application/json' },
-    body: JSON.stringify(defs),
+    body: JSON.stringify(payload),
   });
   if (!r.ok) {
     console.error(`\n❌ 注册失败 HTTP ${r.status}: ${await r.text()}`);

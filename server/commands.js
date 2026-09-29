@@ -142,10 +142,7 @@ function commandDefs({ activityUrl, clientId }) {
 /** /balance —— 用户反馈「完全没用」的那个 */
 async function cmdBalance(it, bot) {
   const u = await requireUser(it, bot);
-  const row = db.get().prepare(
-    `SELECT COUNT(*) bets, COUNT(DISTINCT CASE WHEN delta > 0 THEN id END) wins
-     FROM bets WHERE user_id = ?`
-  ).get(u.id);
+  const row = db.get().prepare('SELECT COUNT(*) AS bets FROM bets WHERE user_id = ?').get(u.id);
   const rank = db.get().prepare('SELECT COUNT(*) + 1 AS r FROM users WHERE coins > ?').get(u.coins).r;
 
   await bot._reply(it, {
