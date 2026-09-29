@@ -266,14 +266,79 @@ function register(router) {
   });
 
   /* ---- 游戏参数保存后立即让引擎重载 ---- */
+  /**
+   * 赔率分布预览（保存前/保存后都能调）。
+   *
+   * 【为什么放在服务端】前端 JS 里复制了一份抽样逻辑，两边很容易不同步
+   * （之前就出现过「前端预览和实际结果不一样」）。
+   * 这里直接调生产用的 simulate()，跑的就是真实引擎代码。
+   */
+  router.get('/admin/api/odds-preview', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const rounds = Math.min(50000, Math.max(100, Number(req.query.get('rounds')) || 10000));
+    const { simulate } = require('../game-logic');
+    try {
+      json(res, 200, { ok: true, ...simulate(db.allSettings(), rounds) });
+    } catch (e) {
+      json(res, 500, { error: '预览失败：' + e.message });
+    }
+  });
+
   router.post('/admin/api/settings', async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const b = await readBody(req);
+    // 【诊断日志】用户 2026-09-29 反馈「保存后没生效」，但服务端完全
+    // 没有请求记录，无法判断是请求没到、还是到了没写。
+    // 把收到的键和值打出来（不含敏感配置），下次再出问题一眼能定位。
+    console.log(`[admin] POST /settings 收到 ${Object.keys(b).length} 个键: ` +
+      Object.keys(b).map((k) => `${k}=${String(b[k]).slice(0, 40)}`).join(' '));
+
+    /**
+     * 【2026-09-30】分布表校验。
+     *
+     * 之前 POST 是无脑 setSetting，非法数据（合计≠100、区间倒挂）照样入库，
+     * 后端 tableRate() 会静默丢弃非法行 —— 用户看到「保存成功」但实际分布
+     * 和填的完全不一样，而且没有任何提示。
+     *
+     * 现在前端拦一次（见 btnSaveOdds），后端再拦一次，
+     * 保证库里永远只存能解释的配置。
+     */
+    if (b.odds_table_json) {
+      let rows;
+      try { rows = JSON.parse(b.odds_table_json); }
+      catch (_) { return json(res, 400, { error: '分布表格式错误，不是合法 JSON' }); }
+      // 校验逻辑只有一份：server/odds-validate.js
+      // 前端也用同一套规则（内联副本），两边不会漂移。
+      const chk = require('../odds-validate').validateTable(rows);
+      if (!chk.ok) return json(res, 400, { error: chk.error });
+    }
+
     for (const [k, v] of Object.entries(b)) db.setSetting(k, v);
+    console.log(`[admin] 已写入，当前 odds_mode=${db.getSetting('odds_mode', '?')} ` +
+      `odds_table_json 长度=${String(db.getSetting('odds_table_json', '')).length}`);
     if (router._engine && typeof router._engine.refreshSettings === 'function') {
       router._engine.refreshSettings();
     }
-    json(res, 200, { ok: true, settings: db.allSettings() });
+
+    /**
+     * 保存后回一个「实际会跑成什么样」的摘要。
+     *
+     * 用户 2026-09-29 提过：点完保存不知道配置是否生效。
+     * 这里用生产同一条 decideRate() 真实模拟 2 万局，
+     * 把结果一起返回，前端 toast 直接显示。
+     */
+    let effect = null;
+    if (b.odds_mode === '6' && b.odds_table_json) {
+      const gl = require('../game-logic');
+      effect = gl.simulate({
+        ...db.allSettings(),
+        odds_mode: '6',
+        odds_table_json: b.odds_table_json,
+        min_rate: b.min_rate ?? db.getSetting('min_rate', 1.01),
+        max_rate: b.max_rate ?? db.getSetting('max_rate', 125),
+      }, 20000);
+    }
+    json(res, 200, { ok: true, settings: db.allSettings(), effect });
   });
 
   /* ---------- 转账：全站记录 + 管理员代发 ---------- */

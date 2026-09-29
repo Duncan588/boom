@@ -230,6 +230,19 @@ function register(router, engine) {
     json(res, 200, { ok: true, profit: r.profit, rate: r.rate, balance: round2(r.balance) });
   });
 
+  /**
+   * Bot 连接诊断。
+   *
+   * 【为什么需要】之前判断「bot 到底连着没有」只能看日志最后一行，
+   * 而那行永远是「已上线」—— socket 静默死亡时完全看不出异常。
+   * 这个端点直接返回真实状态，不用猜。
+   */
+  router.get('/api/bot/diagnostics', (req, res) => {
+    const bot = global.__bot;
+    if (!bot) return json(res, 200, { ok: false, msg: 'bot 未启动（缺少 DISCORD_BOT_TOKEN）' });
+    json(res, 200, { ok: true, ...bot.diagnostics() });
+  });
+
   router.get('/api/game/history', async (req, res) => {
     const u = requireUser(req, res); if (!u) return;
     const rows = db.get().prepare(

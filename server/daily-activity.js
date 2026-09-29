@@ -128,7 +128,47 @@ class DailyHighRate {
     if (this.lastDay !== day) {
       if (this.active) { this.log('跨天清理昨日活动'); this.active = null; }
       this.pending = null;         // 预告也要清，否则会跨天误开
+      this._restored = false;      // 新的一天：允许重新恢复/开启
+      // ⚠️ 这里【不能】清 daily_activated_day：首次启动时 lastDay 是 null，
+      // 本来就 !== day，每次重启都会走这段，把标记清掉，
+      // 导致下面的恢复分支永远读不到 savedDay === day → 每次重启都重建活动。
+      // 跨天时的清理由 deactivate() 负责（活动结束才清），这里不碰。
       this.lastDay = day;
+    }
+
+    /**
+     * 【修复：重启就多建一个 Discord 活动】
+     *
+     * pending / active 原本只存在内存里，进程重启后归零，
+     * tick() 便认为「今天的预告还没建」，于是每次重启都多创建一个
+     * Scheduled Event（频道里也会多发一条公告）。
+     *
+     * 现在把已建的 eventId 落库：daily_event_id + daily_event_day。
+     * 重启后若库里有「今天」的记录，就直接沿用，不再重复创建。
+     */
+    if (!this._restored) {
+      this._restored = true;
+      const savedDay = db.getSetting('daily_activated_day', '');
+      if (savedDay === day) {
+        // 今天已经开过：从 events_json 里把活动读回内存，
+        // 这样重启后 activate() 不会再次触发（也就不会重复建活动/重复发公告）。
+        try {
+          const list = JSON.parse(db.getSetting('events_json', '[]') || '[]');
+          const found = Array.isArray(list) && list.find((e) => e && e.__daily);
+          if (found) {
+            const h = Number(String(found.from).slice(0, 2));
+            if (hour > h) {
+              // 重启时活动时段其实已经过去了（如 22:30 重启，而活动是 21:00–22:00）
+              // 按「未开启」处理，清掉标记，避免这个残留条目挡住后续开启。
+              this.log(`库中活动 ${found.name} 时段已过（现在 ${hour} 时），清理残留`);
+              db.setSetting('daily_activated_day', '');
+            } else {
+              this.active = { hour: h, name: found.name, ...found };
+              this.log(`从库中恢复今日已开启活动：${found.name}（不重复创建）`);
+            }
+          }
+        } catch (_) { /* 解析失败则按未开启处理 */ }
+      }
     }
 
     // 今天的随机小时（落库，跨重启稳定）
@@ -177,13 +217,19 @@ class DailyHighRate {
   /** 开启：写入 events_json（引擎每局读它）+ 通知 Discord */
   activate(c, hour) {
     const name = `高倍狂欢 ${hour}:00–${hour + 1}:00`;
-    // 活动实际占 [hour:00, hour+1:00)，但 events_json 的 to 用 24:00 会让
-    // toMinutes('24:00') 算出 1440，和引擎的 0-1439 比较永远不命中 → 必须封到 23:59
-    const endMin = Math.min(1439, (hour + 1) * 60 - 1);
+    /**
+     * 活动占 [hour:00, hour+1:00)。
+     *
+     * 之前这里把 to 封到 23:59，是为了绕开 toMinutes('24:00') 返回 null 的 bug。
+     * 现在 toMinutes 已支持 "24:00"，可以直接写正常整点。
+     * 写成 (hour+1):00 还有一个好处：引擎用 `cur < to`（左闭右开），
+     * hour+1 整点正好是下一小时开始，边界语义清晰，不会漏掉最后一分钟。
+     */
+    const endHour = hour + 1;
     const entry = {
       name,
       from: `${String(hour).padStart(2, '0')}:00`,
-      to: `${String(Math.floor(endMin / 60)).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`,
+      to: `${String(endHour).padStart(2, '0')}:00`,
       min: c.min,
       max: c.max,
       weight: c.weight,
@@ -201,6 +247,19 @@ class DailyHighRate {
     this.active = { hour, name, ...entry };
     this.log(`活动开启：${name}  倍率 ${c.min}x–${c.max}x  已写入 events_json`);
 
+    /**
+     * 【修复：重启就多建一个 Discord 活动】
+     *
+     * pending / active 原本只存在内存，进程重启后归零，
+     * tick() 便认为「今天还没开过」→ 每次重启都重新建 Scheduled Event
+     * 并重发一条频道公告。
+     *
+     * 这里把「今天已开启」落库；tick() 启动时会读它并复用内存态，
+     * 于是重启后不再重复创建。
+     */
+    db.setSetting('daily_activated_day', todayKey(new Date()));
+    this._restored = true;
+
     if (c.announce) this.announceDiscord(c, name, entry);
   }
 
@@ -208,6 +267,10 @@ class DailyHighRate {
   deactivate(c, why) {
     if (!this.active) return;
     const name = this.active.name;
+    // 活动已结束 → 清除「今天开过」的标记。
+    // 否则当天时段结束后重启，会因标记仍在而跳过 activate()，
+    // 下一个时段（或明天）就再也开不了。
+    db.setSetting('daily_activated_day', '');
     // 快照：closeDiscord 是异步的，而下面马上要把 this.active 置 null。
     // 之前它直接读 this.active.messageId，此时已变成 null →
     // TypeError: Cannot read properties of null (reading 'messageId')

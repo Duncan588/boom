@@ -40,7 +40,20 @@ const CFG = {
    * 最低飞行时长（毫秒）。按公式 1.10x 只有 0.2 秒、1.5x 只有 1 秒 ——
    * 玩家来不及看曲线就炸了。2.5 秒是「能看到火箭飞起来再炸」的最小值。
    */
-  MIN_FLIGHT_MS: 2500,
+  // 【2026-09-30 已删除 MIN_FLIGHT_MS 保底飞行时长】
+  //
+  // 原来这里有个 2500ms 的下限，理由是「低倍率局按公式只有 0.2~1 秒，
+  // 玩家来不及看清曲线」。但这个保底把【原版的瞬爆】彻底破坏了：
+  // 原版 PushController::fastCalc() 的爆率是 rand(100,120)/100 = 1.00~1.20x，
+  // 火箭刚起飞就炸（立即结算，0 飞行时间）。
+  //
+  // 加上保底后：1.01~1.5x 全部被撑成 2.5 秒，瞬爆效果完全消失。
+  // 于是又不得不加一个「☐ 瞬爆」勾选框去强行绕过自己加的保底 ——
+  // 纯属自己造 bug 自己补。
+  //
+  // 现在恢复原版行为：不设任何飞行时长下限，1.0x 就是 0ms。
+  // 用户分布表里 1.01~1.5x 那行【不需要勾任何东西】自动就是瞬爆。
+  MIN_FLIGHT_MS: 0,
 };
 
 /**
@@ -57,13 +70,23 @@ function flightMs(rate, opts) {
   const disc = 40 * r - 24;
   if (disc < 0) return 0;
   const t = (Math.sqrt(disc) - 4) / 2;
-  // 【最低飞行时长】低倍率局按公式只有 0.2~1 秒，玩家根本来不及看清曲线
-  // 就炸了，体感像「刚点进去就没了」。加一个下限，让每一局都至少飞一会儿。
-  // 只影响低倍率局（高倍率局的时长本来就远超这个值）。
-  //
-  // ⚠️ 瞬爆（模式 5 的 w_boom）不能吃这个下限 —— 它的卖点就是「不给窗口」。
-  // 调用方（engine）会用 opts.instant 跳过这里。
-  return Math.max(opts && opts.instant ? 0 : CFG.MIN_FLIGHT_MS, Math.round(t * CFG.FLIGHT_SCALE * 1000));
+  /**
+   * 【2026-09-30】删掉了飞行时长下限，恢复原版行为。
+   *
+   * 原来这里是 `Math.max(opts.instant ? 0 : MIN_FLIGHT_MS, ...)`，
+   * 其中 MIN_FLIGHT_MS=2500。查原版源码 PushController.php 确认：
+   *   - fastCalc()（立即结算）爆率 rand(100,120)/100 = 1.00~1.20x
+   *   - 整个项目 grep 不到任何「保底时长 / MIN_FLIGHT」概念
+   * 也就是说原版低倍率局【就是会飞很短甚至 0】，没有下限保护。
+   *
+   * 加上那个 2500ms 保底后，原版瞬爆被彻底抹平，
+   * 只好再引入「☐ 瞬爆」勾选去绕过自己加的保底。
+   *
+   * 现在：严格按公式走，1.0x → 0ms，1.2x → 1124ms，2.0x → 4354ms。
+   * opts.instant 保留（engine 仍会传），但不再影响结果 ——
+   * 1.0x 以下公式本身就返回 0，语义天然一致。
+   */
+  return Math.round(t * CFG.FLIGHT_SCALE * 1000);
 }
 
 /**
@@ -111,9 +134,22 @@ function decideRate(cfg, pot, pool, event) {
     return round2(v);
   };
 
-  // 限时活动优先：直接在该活动的倍率区间内取
+  /**
+   * 限时活动优先：直接在该活动的倍率区间内取。
+   *
+   * 【2026-09-30 修：活动倍率不能被后台 max_rate 砍掉】
+   *
+   * 原来这里走的是 clamp()，而 clamp 用的是 cfg.min_rate / cfg.max_rate
+   * —— 那对护栏是给日常分布表用的。后果：后台 max_rate=125 时，
+   * 活动里配的 min=20 / max=1000 被压成【全部 125x】，
+   * 活动配置写什么都没用。用户反馈「配了 20x-1000x 但没生效」就是这个。
+   *
+   * 修法：活动倍率只保下限（不能低于 min_rate，否则玩家连反应都来不及），
+   * 上限由活动自己的 max 决定 —— 运营显式配的高倍时段不该被日常护栏截断。
+   */
   if (event) {
-    return { rate: clamp(event.rate), fast: false, mode: 'event:' + (event.name || '') };
+    const lo = Math.max(min, Number(event.rate) || min);
+    return { rate: round2(lo), fast: false, mode: 'event:' + (event.name || '') };
   }
 
   // 无下注 → 保底区间随机
@@ -147,6 +183,42 @@ function decideRate(cfg, pot, pool, event) {
     // 低段下限（1.01）也可能低于 min_rate，那是正常低倍率局，不该被当成瞬爆。
     if (w.boom) return { rate: round2(w.v), fast: true, mode: '5-instant' };
     rate = w.v;
+  } else if (mode === '6') {
+    const t = tableRate(cfg);
+    if (!t) return { rate: clamp(min + Math.random() * 0.9), fast: false, mode: '6-fallback' };
+    /**
+     * 【2026-09-30】不再有「瞬爆勾选」。
+     * 原版低倍率局本来就飞得极短（1.0x → 0ms），没有下限保护；
+     * 我之前加的 MIN_FLIGHT_MS=2500 保底把那个行为抹平了，
+     * 才不得不引入 boom 标记去绕过。保底已删，boom 一并去掉。
+     *
+     * 现在「瞬爆」不是一个配置项，而是【下界填多少】的自然结果：
+     * 下界 1.00 → 0ms（刚起飞就炸）
+     * 下界 1.50 → 2500ms
+     */
+    rate = t.v;
+  }
+
+  /**
+   * 【2026-09-30】模式 6 不再走 clamp()。
+   *
+   * 原来所有模式最后都 `return { rate: clamp(rate) }`，
+   * 而 clamp 用的是后台 min_rate / max_rate 那对护栏。
+   * 后果：用户手填的区间下界被【静默改写】——
+   *   填 1.5–10x、后台 min_rate=1.01 → 实际从 1.01 开始取（等于 1.01–10x）
+   *   填 20–30x       → 实际从 1.01 开始取，80% 的局掉进 1.5–20x
+   * 「三列都手填」这个需求等于没实现。
+   *
+   * 与限时活动同一个毛病（活动被 max_rate 砍成 125x），
+   * 根子都是「用户配的区间不该被后台护栏改写」。
+   *
+   * 护栏仍然存在，但只作为【兜底】：配置本身合法时不再干涉，
+   * 避免 clamp 把用户填的区间边界改掉。
+   */
+  if (mode === '6') {
+    // tableRate 已保证 min < max 且 min ≥ 0.01，这里只防数值异常
+    const v = Number(rate);
+    return { rate: isFinite(v) && v > 0 ? round2(v) : clamp(min), fast: false, mode };
   }
 
   return { rate: clamp(rate), fast: false, mode };
@@ -176,29 +248,135 @@ function decideRate(cfg, pot, pool, event) {
  * 玩家视角：日常 1.01–10x，偶尔冲到 30x+，50x 是稀有事件。
  * 想要更稳就把 w_high / w_top 调小、w_low 调大。
  */
+/**
+ * 模式 6：百分比分布表（简化配置，用户 2026-09-29 要求）
+ *
+ * 【为什么要有这个模式】
+ * 模式 5 是五段「区间 + 权重」两组参数（10 个数字），后台表单很难读懂，
+ * 改起来也不知道改完会变成什么分布。
+ * 模式 6 改成一张【百分比表】：每行「倍率上限 + 占比%」，加总 100% 即可。
+ * 例如用户给的配置：
+ *
+ *   倍率区间            占比
+ *   1.5x 以下（瞬爆）      10
+ *   1.5 – 10x            40
+ *   10 – 30x             30
+ *   30 – 50x             10
+ *   50 – 80x              5
+ *   80 – 100x             5
+ *
+ * 存成一行 JSON：odds_table_json
+ *   [{"max":1.5,"pct":10,"boom":true},
+ *    {"max":10,"pct":40},{"max":30,"pct":30},
+ *    {"max":50,"pct":10},{"max":80,"pct":5},{"max":100,"pct":5}]
+ *
+ * 第一行标了 "boom":true 表示「瞬爆」—— 刚起飞就炸，不给逃跑窗口，
+ * 不受 min_rate 下限保护。其余各行在 [上一行的 max, 本行的 max] 区间内均匀取值。
+ * 若第一行没标 boom，则最低一段从 min_rate 起算。
+ */
+function tableRate(cfg) {
+  let rows = [];
+  try {
+    const raw = cfg.odds_table_json;
+    rows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch (_) { rows = []; }
+  if (!Array.isArray(rows) || !rows.length) return null;
+
+  /**
+   * 清洗用户填的行。
+   *
+   * 【2026-09-30 用户确认：下界也手填】
+   * 原来是「下界 = 上一行的 max」，每行只有一个上界。
+   * 现在每行有独立的 min，用户在后台看到什么就按什么填，互不影响。
+   *
+   * 兼容：老配置（只有 max、没有 min）仍按「上一行的 max」推导，
+   * 所以线上现有配置升级后行为不变。
+   */
+  const clean = [];
+  let prevMax = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || {};
+    const max = Number(r.max);
+    const pct = Number(r.pct);
+    if (!isFinite(max) || !isFinite(pct) || pct <= 0) continue;
+    if (max <= prevMax) continue;             // 上界必须严格递增，避免区间倒挂
+
+    // 下界：优先用户手填的 min；没有就接上一行
+    let lo;
+    if (r.min != null && r.min !== '') {
+      lo = Number(r.min);
+      if (!isFinite(lo)) lo = clean.length ? prevMax : 1;
+    } else {
+      lo = clean.length === 0
+        ? Math.max(1, Number(cfg.min_rate) || CFG.MIN_RATE)
+        : prevMax;
+    }
+    /**
+     * 下界可以低于 1 —— 原版就是允许的，倍率越接近 1 飞得越快，
+     * 1.00 时公式直接返回 0ms（刚起飞就炸）。
+     * 但倍率不能是 0 或负数，所以下限卡在 0.01。
+     */
+    lo = Math.max(0.01, Math.min(lo, max - 0.001));  // 保证区间不倒挂
+    clean.push({ min: lo, max, pct });
+    prevMax = max;
+  }
+  if (!clean.length) return null;
+
+  const total = clean.reduce((a, x) => a + x.pct, 0);
+  if (total <= 0) return null;
+
+  // 按百分比抽段
+  let r = Math.random() * total;
+  for (let i = 0; i < clean.length; i++) {
+    r -= clean[i].pct;
+    if (r > 0) continue;
+    return { v: clean[i].min + Math.random() * (clean[i].max - clean[i].min) };
+  }
+  // 浮点兜底：落在最后一行
+  const last = clean[clean.length - 1];
+  return { v: last.min + Math.random() * (last.max - last.min) };
+}
+
 function weightedRate(cfg) {
+  /**
+   * 取配置值，0 是【合法值】（表示该段完全不要）。
+   *
+   * ⚠️ 这里原来写的是 `v > 0 ? v : d` —— 于是后台把某段权重设成 0 时，
+   * 会静默落回默认值。实测：w_boom=50, w_low=50, 其余三个设 0，
+   * 实际 total 变成 50+50+22+20+2=144，瞬爆只有 50/144=34.4%，
+   * 而不是用户要的 50%。「设 0 关闭某段」这个操作根本不生效。
+   *
+   * 现在只有「键不存在 / 非数字」才用默认值，0 尊重用户输入。
+   * 区间端点仍要求 > 0（倍率不能是 0 或负数），用 numPos。
+   */
   const num = (k, d) => {
+    if (cfg[k] === undefined || cfg[k] === null || cfg[k] === '') return d;
+    const v = Number(cfg[k]);
+    return isFinite(v) ? v : d;
+  };
+  /** 倍率端点必须 > 0 */
+  const numPos = (k, d) => {
     const v = Number(cfg[k]);
     return isFinite(v) && v > 0 ? v : d;
   };
-  // 五段权重：瞬爆 / 低 / 中 / 高 / 爆
-  const wBoom = num('w_boom', 6);
-  const wLow = num('w_low', 50);
-  const wMid = num('w_mid', 22);
-  const wHigh = num('w_high', 20);
-  const wTop = num('w_top', 2);
+  // 五段权重：瞬爆 / 低 / 中 / 高 / 爆（0 表示关闭该段）
+  const wBoom = Math.max(0, num('w_boom', 6));
+  const wLow = Math.max(0, num('w_low', 50));
+  const wMid = Math.max(0, num('w_mid', 22));
+  const wHigh = Math.max(0, num('w_high', 20));
+  const wTop = Math.max(0, num('w_top', 2));
 
   // 瞬爆：1.00 ~ boomMax（默认 1.01），刚起飞就没
-  const boomMax = Math.max(1.001, num('w_boom_max', 1.01));
-  // 常规四段，段内均匀
-  const loMin = num('w_lo_min', 1.01);
-  const loMax = Math.max(loMin, num('w_lo_max', 4.00));
-  const midMin = num('w_mid_min', 4.00);
-  const midMax = Math.max(midMin, num('w_mid_max', 10.00));
-  const highMin = num('w_high_min', 10.00);
-  const highMax = Math.max(highMin, num('w_high_max', 30.00));
-  const topMin = num('w_top_min', 30.00);
-  const topMax = Math.max(topMin, num('w_top_max', 50.00));
+  const boomMax = Math.max(1.001, numPos('w_boom_max', 1.01));
+  // 常规四段，段内均匀（端点用 numPos，倍率不能 <= 0）
+  const loMin = numPos('w_lo_min', 1.01);
+  const loMax = Math.max(loMin, numPos('w_lo_max', 4.00));
+  const midMin = numPos('w_mid_min', 4.00);
+  const midMax = Math.max(midMin, numPos('w_mid_max', 10.00));
+  const highMin = numPos('w_high_min', 10.00);
+  const highMax = Math.max(highMin, numPos('w_high_max', 30.00));
+  const topMin = numPos('w_top_min', 30.00);
+  const topMax = Math.max(topMin, numPos('w_top_max', 50.00));
 
   const total = wBoom + wLow + wMid + wHigh + wTop;
   const r = Math.random() * total;
@@ -209,13 +387,34 @@ function weightedRate(cfg) {
   return { v: topMin + Math.random() * (topMax - topMin) };
 }
 
-/** "HH:MM" → 当日分钟数；非法返回 null */
+/**
+ * "HH:MM" → 当日分钟数；非法返回 null。
+ *
+ * ⚠️ 必须接受 "24:00"（= 1440 = 当日末尾）。
+ * 之前这里写的是 `if (h > 23) return null`，于是 "24:00" 被判非法返回 null，
+ * 活动条目直接被 activeEvent() 跳过 —— 调用方只好把结束时间封到 "23:59"，
+ * 绕了一圈才把"跨天/整点结束"这个坑填上。
+ * 现在 24:00 合法，daily-activity.js 可以直接写 "22:00" 这种正常整点。
+ */
 function toMinutes(hhmm) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
   if (!m) return null;
   const h = +m[1], mi = +m[2];
-  if (h > 23 || mi > 59) return null;
-  return h * 60 + mi;
+  if (h > 24 || mi > 59) return null;
+  if (h === 24 && mi > 0) return null;   // 只允许精确的 24:00
+  return h * 60 + mi;                    // "24:00" → 1440
+}
+
+/**
+ * 取北京时间的「时:分」。
+ *
+ * ⚠️ 必须显式换算时区。服务器是 Etc/UTC，Date 的本地 getter
+ * （getHours/getMinutes）返回的是 UTC 小时 —— 拿它和北京时间配置比对，
+ * 会整体差 8 小时，导致活动配置永不生效。
+ */
+function beijingParts(d = new Date()) {
+  const s = new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  return { hour: s.getHours(), minute: s.getMinutes() };
 }
 
 /**
@@ -230,13 +429,37 @@ function activeEvent(cfg, now = new Date()) {
   try { list = JSON.parse(raw); } catch (_) { return null; }
   if (!Array.isArray(list)) return null;
 
-  const cur = now.getHours() * 60 + now.getMinutes();
+  /**
+   * 【重大 bug：这里原来用 now.getHours()】
+   *
+   * 服务器时区是 Etc/UTC，而活动时段是按【北京时间】配置的。
+   * daily-activity.js 写进 events_json 的是 "21:00"–"21:59"（北京时间），
+   * 这里却拿 UTC 小时去比 —— 北京 21:00 = UTC 13:00，永远对不上，
+   * 于是「每日高倍活动」配置正确却【从不生效】。
+   *
+   * 修法：和 daily-activity.js 一样显式换算北京时间。
+   * 注意不要再用 Date 的本地 getter（getHours/getMinutes）—— 它们跟随
+   * 进程时区，而进程时区是 UTC。
+   */
+  const bjParts = beijingParts(now);
+  const cur = bjParts.hour * 60 + bjParts.minute;
   for (const ev of list) {
     if (!ev || ev.enabled === false) continue;
     const from = toMinutes(ev.from), to = toMinutes(ev.to);
     if (from == null || to == null) continue;
 
-    const hit = from <= to ? (cur >= from && cur < to) : (cur >= from || cur < to);
+    /**
+   * 时段命中判定。
+   *
+   * events_json 里活动的 to 历史上被写成 "21:59"（因为 toMinutes('24:00')
+   * 会得到 1440，和引擎的 0-1439 比永远不命中，只能退而求其次封到 23:59）。
+   * 现在 daily-activity.js 直接写 "22:00"，这里两者都支持：
+   *   - to == 1440（"24:00"）→ 视为当天末尾 cur < 1440
+   *   - 正常 "22:00" → cur < 1320
+   *   - from > to（如 23:00-01:00）→ 跨零点
+   */
+  const end = to === 1440 ? 1440 : to;
+  const hit = from <= end ? (cur >= from && cur < end) : (cur >= from || cur < end);
     if (!hit) continue;
 
     const lo = Math.max(1, Number(ev.min) || 1.10);
@@ -249,4 +472,78 @@ function activeEvent(cfg, now = new Date()) {
   return null;
 }
 
-module.exports = { CFG, flightMs, rateAt, decideRate, activeEvent, payout, round2, sleep, toMinutes };
+/**
+ * 模拟 N 局，返回实际分布 —— 后台「保存后提示是否生效」用。
+ *
+ * 【为什么需要】保存配置后静默生效，用户不知道改完是什么样。
+ * 这个函数把「你填的百分比」翻译成「实际跑 10000 局的结果」，
+ * 两者不一致时（配置被 min_rate/max_rate 截断、max 未递增等）立刻能看出来。
+ *
+ * @param {object} cfg  游戏参数
+ * @param {number} rounds 模拟局数
+ */
+function simulate(cfg, rounds = 10000) {
+  const min = Number(cfg.min_rate) || CFG.MIN_RATE;
+  const max = Number(cfg.max_rate) || CFG.MAX_RATE;
+  const buckets = new Map();      // 「显示区间」 -> 局数
+  const KEY = [
+    [0, 1.5, '1.5x 以下'],
+    [1.5, 10, '1.5 – 10x'],
+    [10, 30, '10 – 30x'],
+    [30, 50, '30 – 50x'],
+    [50, 80, '50 – 80x'],
+    [80, 1e9, '80x 以上'],
+  ];
+  for (const k of KEY) buckets.set(k[2], 0);
+
+  let sum = 0;
+  let boom = 0;
+  let nonBoomMin = Infinity;
+  const vals = [];
+  for (let i = 0; i < rounds; i++) {
+    const r = decideRate(cfg, 1000, 0, null);
+    sum += r.rate;
+    vals.push(r.rate);
+    /**
+     * 「瞬爆」的判定标准改为「飞行时间不足 1 秒」——
+     * 也就是倍率落在 1.5x 以下。
+     * 【2026-09-30】不再依赖 r.fast 标记：那个标记原本是给
+     * MIN_FLIGHT_MS 保底做「跳过」用的，保底已删，标记失去意义。
+     */
+    if (r.rate < 1.5) boom++;
+    else if (r.rate < nonBoomMin) nonBoomMin = r.rate;
+    for (const k of KEY) {
+      if (r.rate >= k[0] && r.rate < k[1]) { buckets.set(k[2], buckets.get(k[2]) + 1); break; }
+    }
+  }
+  vals.sort((a, b) => a - b);
+  const pct = (n) => round2((n / rounds) * 100);
+  return {
+    rounds,
+    instantBoom: boom,
+    instantBoomPct: pct(boom),
+    avg: round2(sum / rounds),
+    median: vals[Math.floor(rounds / 2)],
+    max: vals[rounds - 1],
+    min: vals[0],
+    minNonBoom: nonBoomMin === Infinity ? null : round2(nonBoomMin),
+    buckets: KEY.map((k) => ({
+      label: k[2],
+      count: buckets.get(k[2]),
+      pct: pct(buckets.get(k[2])),
+    })),
+    /**
+     * 是否被 min_rate / max_rate 截断。
+     * ⚠️ 瞬爆局（fast）本来就低于 min_rate（1.00x 起），
+     *    那是设计如此，不算截断 —— 所以只检查非瞬爆局的最低值。
+     */
+    truncated: nonBoomMin < min - 0.001 || vals[rounds - 1] > max + 0.001,
+    minRate: min,
+    maxRate: max,
+  };
+}
+
+module.exports = {
+  CFG, flightMs, rateAt, decideRate, activeEvent, payout, round2, sleep,
+  toMinutes, tableRate, simulate, beijingParts,
+};

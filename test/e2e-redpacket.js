@@ -11,6 +11,13 @@
  *   2. 同一个人点两次只能领一次（UNIQUE 兜底）
  *   3. 余额守恒：QUN_total 不变
  */
+/*
+ * 红包金额与领取人全部是 mock 造的，不涉及真实 QUN。
+ * ⚠️ 【本文件所有数据均为构造的测试数据，不是线上真实数据】
+ *   赔率配置、倍率、mock 响应全部是写死的样例。
+ *   测试不读系统当前时间、不连生产数据库、不发真实 Discord 请求。
+ *   生产真实值请查 /root/data/baodian.db 的 settings 表（仅服务器可访问）。
+ */
 
 const path = require('path');
 const os = require('os');
@@ -21,7 +28,7 @@ process.env.DB_FILE = DB;
 
 const db = require('../server/db');
 const rp = require('../server/redpacket');
-const { renderRedpacketCard } = require('../server/card-image');
+const { buildRedpacketMessage, readCover } = require('../server/card-image');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✅ ' + m); } else { fail++; console.log('  ❌ ' + m); } };
@@ -105,10 +112,19 @@ function totalCoins() {
   console.log('\n=== 7. 余额全程守恒 ===');
   ok(totalCoins() === 32000, `红包内部转移不改变总量（30000 初始 + 2000 新号 = 32000，实际 ${totalCoins()}）`);
 
-  console.log('\n=== 8. 卡片图片生成 ===');
-  const openPng = await renderRedpacketCard({ amountTotal: pkg.total, slots: pkg.slots, mode: 'even', creatorName: '测试员', claimed: 5, claimedSum: 1000, status: 'done' });
-  ok(Buffer.isBuffer(openPng) && openPng.length > 1000, `PNG 生成 ${openPng.length} 字节`);
-  ok(openPng.slice(1, 4).toString() === 'PNG', 'PNG magic 正确');
+  console.log('\n=== 8. 卡片消息体（按用户要求：不渲染）===');
+  // 用户要求：一张封面图 + 「来自 XX 的一个红包」+ 领取按钮。不生成图片。
+  const msg = buildRedpacketMessage({ creatorName: '测试员', mode: 'even' });
+  ok(/来自 \*\*测试员\*\* 的一个红包/.test(msg.embeds[0].description), `卡片文字: ${msg.embeds[0].description}`);
+  ok(!/QUN|份|\d/.test(msg.embeds[0].description.replace('🧧','')), '卡片上不出现金额/份额等额外信息');
+  ok(msg.embeds[0].image.url === 'attachment://hongbao_cover.jpg', '引用用户指定的封面图');
+  ok(msg.components[0].components[0].label === '领取', '按钮文案是「领取」');
+  ok(msg.components[0].components[0].custom_id === 'hongbao:claim', 'custom_id 固定，不带 id');
+  const cover = readCover();
+  ok(Buffer.isBuffer(cover) && cover.length > 100000, `封面原图 ${(cover.length / 1024 | 0)}KB 直接使用，不加工`);
+  // readCover() 每次重新读盘，Buffer 不是同一对象，要比内容
+  ok(Buffer.isBuffer(msg.files[0].attachment) && msg.files[0].attachment.equals(cover),
+    '附件内容与封面原图逐字节一致');
 
   console.log('\n=== 9. 边界与异常 ===');
   let e1 = null; try { rp.create({ creatorId: alice, channelId: '1', amountTotal: 0.9, slots: 100, mode: 'even' }); } catch (e) { e1 = e; }

@@ -1,57 +1,50 @@
 /**
  * Discord slash 指令 + 红包交互处理器。
  *
- * 【为什么 /balance 之前完全没用】指令在开发者后台注册过，但注册 ≠ 能响应。
- * 交互必须经 Gateway 的 INTERACTION_CREATE 送达，进程不连 Gateway 就永远收不到；
- * 而 Bot 之前只做 REST（发消息、建 Scheduled Event），那些走 HTTP 所以一切正常。
- * 「指令存在但点了没反应」= 只做了 REST 没做 Gateway。修好连接后本文件才有意义。
+ * 【/balance 之前失效的根因】指令在开发者后台注册过，但进程只做 REST 调用，
+ * 从未连接 Gateway —— 交互事件走 Gateway 的 INTERACTION_CREATE，不连就收不到。
+ * 「注册」和「能响应」是两件事，这是最容易误判成配置问题的地方。
  *
- * 所有指令都是 application command（斜杠指令）。/coin 已按要求移除。
+ * 【本文件的铁律】所有回复都必须走 Responder（server/responder.js），
+ * 不要直接调 bot._reply / bot._patch。理由见 responder.js 文件头：
+ * interaction token 在 gateway 重连后会失效（404），DM/频道消息不会。
  */
 
 const db = require('./db');
 const rp = require('./redpacket');
-const { renderRedpacketCard, fmtAmount } = require('./card-image');
+const { buildRedpacketMessage } = require('./card-image');
+const { Responder, fmtNum, actorOf } = require('./responder');
 
-/* ---------- 小工具 ---------- */
-
-const CN_NUM = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
-
-function fmtNum(n) {
-  const v = Number(n) || 0;
-  return v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/**
+ * 取（或懒创建）Responder。
+ *
+ * 不用 bot.responder 字段：那个挂载点要求 buildCommands 一定先跑过，
+ * 单元测试直接调 handler 时就会拿到 undefined（线上表现为
+ * 「Cannot read properties of undefined (reading 'err')」）。
+ * 这里改成按需创建，handler 自身永远可用。
+ */
+function R_(bot) {
+  if (!bot.__responder) bot.__responder = new Responder(bot);
+  return bot.__responder;
 }
 
-function shortName(u) {
-  if (!u) return '未知用户';
-  return u.global_name || u.username || `用户${u.discord_id}`;
-}
+/* ---------- 工具 ---------- */
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-/** 取指令选项（application command 的参数） */
 function opt(it, name) {
   const o = (it.data && it.data.options) || [];
   const f = o.find((x) => x.name === name);
   return f ? f.value : undefined;
 }
 
-/** 按钮交互里取按钮上的参数 */
-function field(it, name) {
-  const row = (it.data && it.data.message && it.data.message.components) || [];
-  for (const r of row) for (const c of (r.components || [])) {
-    for (const f of (c.fields || [])) if (f.name === name) return f.value;
-  }
-  return undefined;
+function shortName(u) {
+  if (!u) return '匿名';
+  return u.global_name || u.username || `用户${u.discord_id}`;
 }
 
-/** 找到或创建该 Discord 用户的游戏内账号（只发指令不玩过的人也能领红包） */
+/** 找或建游戏内账号。upsertUser 返回 {user, created, granted}，不是 user 本身。 */
 function ensureUser(discordId, username, globalName, avatar) {
-  let u = db.getUserByDiscord(discordId);
-  if (u) return { user: u, created: false };
-  // upsertUser 返回 {user, created, granted}，不是 user 本身
+  const exist = db.getUserByDiscord(discordId);
+  if (exist) return { user: exist, created: false };
   const r = db.upsertUser({
     discordId,
     username: username || ('u' + discordId),
@@ -61,292 +54,258 @@ function ensureUser(discordId, username, globalName, avatar) {
   return { user: r.user, created: r.created };
 }
 
-/** 统一处理「该用户还没在游戏里出现过」 */
-async function requireUser(interaction, bot) {
-  const discordId = interaction.user.id;
-  const { user, created } = ensureUser(discordId, interaction.user.username, interaction.user.global_name, interaction.user.avatar);
-  if (created) {
-    bot.log(`[bot] 新用户 ${user.username}(${discordId}) 首次通过指令进入，已发放 1000 QUN`);
-  }
-  return user;
+/** 拿操作者的游戏账号，缺 user 字段时给出可读错误而不是 TypeError。 */
+function actorUser(it, bot) {
+  const d = actorOf(it);
+  if (!d || !d.id) throw new Error('无法识别调用者，请在 Discord 频道里重新输入指令');
+  const { user, created } = ensureUser(d.id, d.username, d.global_name, d.avatar);
+  if (created) bot.log(`[bot] 新用户 ${user.username}(${d.id}) 首次通过指令进入，已发 1000 QUN`);
+  return { user, d };
+}
+
+function rankOf(user) {
+  return db.get().prepare('SELECT COUNT(*) + 1 AS r FROM users WHERE coins > ?').get(user.coins).r;
 }
 
 /* ---------- 指令定义 ---------- */
 
 /**
- * Discord application command 定义。register() 会 PUT 到 applications/{id}/commands。
- * 去掉 /launch（Discord 自带的内置 Activity 指令，删不掉也不该重复注册）
+ * 去掉 /launch（Discord 强制的 Entry Point，批量 PUT 不能删）
  * 和 /coin（用户要求删除的旧管理员指令）。
  */
-function commandDefs({ activityUrl, clientId }) {
-  const target = clientId ? `application_id=${clientId}` : 'the app';
-  return [
-    {
-      name: 'boom', description: '打开爆点虚拟金币小游戏',
-      integration_types: [0],   // 0=可安装到服务器
-    },
-    {
-      name: 'activity', description: '打开爆点 Discord Activity 网页',
-      integration_types: [0],
-    },
-    {
-      name: 'balance', description: '查看自己的 QUN 余额',
-      integration_types: [0],
-    },
+function commandDefs({ activityUrl }) {
+  void activityUrl;
+  const raw = [
+    { name: 'boom', description: '打开爆点虚拟金币小游戏' },
+    { name: 'activity', description: '打开爆点 Discord Activity 网页' },
+    { name: 'balance', description: '查看自己的 QUN 余额' },
     {
       name: 'hongbao', description: '发一个 QUN 红包到当前频道',
-      integration_types: [0],
       options: [
+        { name: 'amount', type: 4, required: true, min_value: 1, description: '红包总金额（QUN）' },
+        { name: 'slots', type: 4, required: true, min_value: 1, max_value: 100, description: '领取人数（几份）' },
         {
-          name: 'amount', type: 4, required: true,   // 4 = INTEGER
-          description: '红包总金额（QUN）',
-          min_value: 1,
-        },
-        {
-          name: 'slots', type: 4, required: true,
-          description: '领取人数（几份）',
-          min_value: 1, max_value: 100,
-        },
-        {
-          name: 'mode', type: 3, required: false,  // 3 = STRING
-          description: '分配方式',
-          choices: [
-            { name: '平均分', value: 'even' },
-            { name: '随机分', value: 'random' },
-          ],
+          name: 'mode', type: 3, required: false, description: '分配方式',
+          choices: [{ name: '平均分', value: 'even' }, { name: '随机分', value: 'random' }],
         },
       ],
     },
-    {
-      name: 'checkin', description: '每日签到领取 QUN',
-      integration_types: [0],
-    },
-    {
-      name: 'leaderboard', description: '查看 QUN 排行榜',
-      integration_types: [0],
-    },
-    {
-      name: 'help', description: '查看指令和玩法说明',
-      integration_types: [0],
-    },
-  ].map((c) => {
-    // 默认成员权限留空 = 所有人可用
-    delete c.default_member_permissions;
-    void target; void activityUrl;
-    return c;
-  });
+    { name: 'checkin', description: '每日签到领取 QUN' },
+    { name: 'leaderboard', description: '查看 QUN 排行榜' },
+    { name: 'help', description: '查看指令和玩法说明' },
+  ];
+  return raw.map((c) => ({ ...c, integration_types: [0] }));
 }
 
 /* ---------- 处理器 ---------- */
 
-/** /balance —— 用户反馈「完全没用」的那个 */
 async function cmdBalance(it, bot) {
-  const u = await requireUser(it, bot);
-  const row = db.get().prepare('SELECT COUNT(*) AS bets FROM bets WHERE user_id = ?').get(u.id);
-  const rank = db.get().prepare('SELECT COUNT(*) + 1 AS r FROM users WHERE coins > ?').get(u.coins).r;
-
-  await bot._reply(it, {
-    embeds: [{
-      title: '💰 我的余额',
-      color: 0xffd166,
-      fields: [
-        { name: 'QUN 余额', value: `**${fmtNum(u.coins)}**`, inline: true },
-        { name: '全服排名', value: `第 ${rank} 名`, inline: true },
-        { name: '累计下注', value: `${row.bets} 局`, inline: true },
-      ],
-      footer: { text: 'QUN 仅为娱乐积分，不能充值或提现' },
-    }],
-  });
+  const { user } = actorUser(it, bot);
+  const bets = db.get().prepare('SELECT COUNT(*) AS c FROM bets WHERE user_id = ?').get(user.id).c;
+  const card = R_(bot).balanceCard(user, rankOf(user), bets);
+  await R_(bot).ok(it, '', [card]);
 }
 
-/** /checkin */
 async function cmdCheckin(it, bot) {
-  const u = await requireUser(it, bot);
+  const { user } = actorUser(it, bot);
   const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date());
   const got = db.get().prepare(
     "SELECT 1 AS x FROM coin_logs WHERE user_id=? AND reason='checkin' AND substr(created_at,1,10)=?"
-  ).get(u.id, today);
-  if (got) {
-    return bot._reply(it, { content: '📅 今天已经签到过了，明天再来。', ephemeral: true });
-  }
+  ).get(user.id, today);
+  if (got) return R_(bot).err(it, '今天已经签到过了，明天再来。');
+
   const amount = 100;
-  const after = db.addCoins(u.id, amount, 'checkin', today);
-  await bot._reply(it, {
-    embeds: [{
-      title: '📅 签到成功',
-      description: `获得 **${amount} QUN**`,
-      color: 0x52c41a,
-      fields: [{ name: '当前余额', value: `${fmtNum(after)} QUN`, inline: true }],
-      footer: { text: '每日 00:00（北京时间）重置' },
-    }],
-  });
+  const balance = db.addCoins(user.id, amount, 'checkin', today);
+  await R_(bot).ok(it, '', [R_(bot).checkinCard(amount, balance)]);
 }
 
-/** /leaderboard */
 async function cmdLeaderboard(it, bot) {
   const rows = db.get().prepare('SELECT username, global_name, coins FROM users ORDER BY coins DESC LIMIT 10').all();
-  const me = db.getUserByDiscord(it.user.id);
-  const lines = rows.map((r, i) => {
-    const medal = ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
-    return `${medal} **${r.global_name || r.username}** — ${fmtNum(r.coins)}`;
-  });
-  if (!lines.length) lines.push('还没有人上榜。');
-  const content = lines.join('\n');
-  if (me) {
-    const rank = db.get().prepare('SELECT COUNT(*) + 1 AS r FROM users WHERE coins > ?').get(me.coins).r;
-    await bot._reply(it, {
-      content: `**🏆 QUN 排行榜 TOP 10**\n${content}\n\n你的排名：第 ${rank} 名（${fmtNum(me.coins)} QUN）`,
-    });
-  } else {
-    await bot._reply(it, { content: `**🏆 QUN 排行榜 TOP 10**\n${content}` });
-  }
+  const me = db.getUserByDiscord((actorOf(it) || {}).id);
+  const card = R_(bot).leaderboardCard(rows, me ? { rank: rankOf(me), coins: me.coins } : null);
+  await R_(bot).channel(it.channel_id, { embeds: [card] });
 }
 
-/** /help */
+const HELP_LINES = [
+  '**/balance** — 查看余额与排名',
+  '**/checkin** — 每日签到领 100 QUN',
+  '**/leaderboard** — 排行榜 TOP 10',
+  '**/hongbao** — 发红包（金额 / 领取人数 / 平均分或随机分）',
+  '**/boom** · **/activity** — 打开游戏',
+  '',
+  '**玩法**：10 秒下单 → 5 秒封盘 → 起飞。倍率越高飞得越久。',
+  '看到满意的倍率点「逃跑」即可落袋，倍数自动结算。',
+  '',
+  '*QUN 仅为娱乐积分，不能充值或提现。*',
+];
+
 async function cmdHelp(it, bot) {
-  await bot._reply(it, {
-    embeds: [{
-      title: '爆点逃跑 · 指令帮助',
-      color: 0x7c5cff,
-      description: [
-        '**/balance** — 查看余额与排名',
-        '**/checkin** — 每日签到领 100 QUN',
-        '**/leaderboard** — 排行榜 TOP 10',
-        '**/hongbao** — 发红包（填金额、人数、分配方式）',
-        '**/boom** · **/activity** — 打开游戏',
-        '',
-        '**玩法**：10 秒下单 → 5 秒封盘 → 起飞，倍率越高飞得越久。',
-        '看到满意的倍率点「逃跑」即可落袋，倍数自动结算。',
-        '',
-        '*QUN 仅为娱乐积分，不能充值或提现。*',
-      ].join('\n'),
-    }],
-    ephemeral: true,
-  });
+  await R_(bot).ok(it, '', [R_(bot).helpCard(HELP_LINES)]);
+}
+
+async function cmdOpen(it, bot) {
+  const url = bot.activityUrl;
+  await R_(bot).ok(it, `点击开始游戏 → ${url}`);
 }
 
 /* ---------- 红包 ---------- */
 
-/** /hongbao */
+/**
+ * /hongbao
+ *
+ * 关键：卡片和回执都走 channels/messages（REST），不依赖 interaction token。
+ * 之前用 PATCH /interactions 回执，gateway 一重连 token 就 404，
+ * 表现为「红包建了但频道里没卡片、用户什么都没看到」。
+ */
 async function cmdHongbao(it, bot) {
-  const u = await requireUser(it, bot);
+  const { user, d } = actorUser(it, bot);
+  const R = R_(bot);
 
   const amount = Math.round((Number(opt(it, 'amount')) || 0) * 100) / 100;
   const slots = Math.floor(Number(opt(it, 'slots')) || 0);
   const mode = opt(it, 'mode') === 'random' ? 'random' : 'even';
 
-  // 在频道里可见的报错（不是 ephemeral）—— 用户是发给别人领的，
-  // 出错要让对方知道，别静默
-  const fail = async (msg) => bot._patch(it, { content: `❌ ${msg}`, components: [] });
-
-  if (!amount || amount <= 0) return fail('金额必须大于 0。');
-  if (!slots || slots < 1) return fail('领取人数至少 1 人。');
-  if (amount / slots < 0.01) return fail(`每人份额不足 0.01 QUN。\n${fmtNum(amount)} ÷ ${slots} 太少，请减少人数或加金额。`);
+  if (!(amount > 0)) return R.err(it, '金额必须大于 0。');
+  if (!(slots >= 1)) return R.err(it, '领取人数至少 1 人。');
+  if (amount / slots < 0.01) {
+    return R.err(it, `每人份额不足 0.01 QUN。\n${fmtNum(amount)} ÷ ${slots} 太少，请减少人数或加金额。`);
+  }
 
   let created;
   try {
-    created = rp.create({ creatorId: u.id, channelId: String(it.channel_id), amountTotal: amount, slots, mode });
+    created = rp.create({ creatorId: user.id, channelId: String(it.channel_id), amountTotal: amount, slots, mode });
   } catch (e) {
-    if (e instanceof rp.RedPacketError) return fail(e.message);
+    if (e instanceof rp.RedPacketError) return R.err(it, e.message);
     throw e;
   }
 
-  const png = await renderRedpacketCard({
-    amountTotal: created.total, slots: created.slots, mode: created.mode,
-    creatorName: shortName(u), claimed: 0, claimedSum: 0, status: 'open',
-  });
+  // 【按用户要求】卡片只有：用户的封面图 + 「来自 XX 的一个红包」+ 领取按钮。
+  // 不渲染金额、份额、进度 —— 那些是我之前自作主张加的。
+  const payload = buildRedpacketMessage({ creatorName: shortName(user), mode });
+  let msg = null;
+  try {
+    msg = await R.channel(it.channel_id, payload);
+    db.get().prepare('UPDATE redpackets SET message_id=? WHERE id=?').run(msg.id, created.id);
+  } catch (e) {
+    // 卡片发不出去：钱已经扣了，必须原路退回并告知，绝不吞币
+    bot.log(`[bot] 红包 #${created.id} 卡片发送失败: ${e.message}`);
+    db.addCoins(user.id, created.total, 'redpacket_refund', String(created.id));
+    db.get().prepare("UPDATE redpackets SET status='refunded' WHERE id=?").run(created.id);
+    try {
+      await R.channel(it.channel_id, { content: `❌ <@${d.id}> 红包卡片发送失败（${e.message}），已原路退回 **${fmtNum(created.total)} QUN**。` });
+    } catch (_) {}
+    return;
+  }
 
-  const filename = `hongbao-${created.id}.png`;
-  const msg = await bot.rest('POST', `/channels/${it.channel_id}/messages`, {
-    embeds: [{
-      title: '🧧 有人发了一个红包',
-      description: `<@${it.user.id}> 发出了 **${fmtNum(created.total)} QUN** · ${created.slots} 份 · ${mode === 'even' ? '平均分' : '随机分'}`,
-      color: 0xe63946,
-      image: { url: `attachment://${filename}` },
-      footer: { text: 'QUN 仅为娱乐积分' },
-    }],
-    components: [{
-      type: 1,
-      components: [{
-        type: 2, style: 1, label: '领取红包',
-        custom_id: `hongbao:claim:${created.id}`,
-      }],
-    }],
-    files: [{ name: filename, attachment: png.toString('base64') }],
-  });
-
-  // 回执：只对发包人可见，不刷屏
-  await bot._patch(it, {
-    content: `✅ 红包已发出 · 你的余额 **${fmtNum(created.balance)} QUN**`,
-    components: [], embeds: [],
-  });
-
-  db.get().prepare('UPDATE redpackets SET message_id=? WHERE id=?').run(msg.id, created.id);
-  bot.log(`[bot] 红包 #${created.id} 由 ${shortName(u)} 发出 ${fmtNum(created.total)} / ${created.slots} 份 / ${mode}`);
+  await R.ok(it, `✅ 红包已发出 · 你的余额 **${fmtNum(created.balance)} QUN**`);
+  bot.log(`[bot] 红包 #${created.id} 由 ${shortName(user)} 发出 ${fmtNum(created.total)} / ${created.slots} 份 / ${mode}`);
 }
 
-/** 领取按钮 */
+/**
+ * 领取按钮。
+ *
+ * custom_id 固定是 'hongbao:claim'（不带 id），红包 id 通过【消息 ID】反查：
+ * 用户在哪个红包上点的按钮，interaction 里的 message.id 就是那张卡片。
+ * 这样卡片不用把 id 编进 custom_id，也避免 id 对不上导致点了没反应。
+ */
 async function onClaimButton(it, bot) {
-  const id = Number(String(it.custom_id).split(':').pop());
-  const u = await requireUser(it, bot);
+  const msgId = it.message && it.message.id;
+  const row = msgId
+    ? db.get().prepare('SELECT id, creator_id FROM redpackets WHERE message_id=?').get(String(msgId))
+    : null;
+  if (!row) {
+    bot.log(`[bot] 领取失败：找不到 message_id=${msgId} 对应的红包`);
+    return R_(bot).err(it, '这个红包已失效，请让发包的人重新发一个。');
+  }
+  const id = row.id;
+  const { user, d } = actorUser(it, bot);
+  const R = R_(bot);
 
   let res;
   try {
-    res = rp.claim(id, u.id);
+    res = rp.claim(id, user.id);
   } catch (e) {
-    if (e instanceof rp.RedPacketError) {
-      // 领过/领完：回一条只有自己可见的提示，不动原卡片
-      return bot._patch(it, { content: `⚠️ ${e.message}`, components: [] });
-    }
+    if (e instanceof rp.RedPacketError) return R.err(it, e.message);
     throw e;
   }
 
-  // 【核心需求】用户要收到「您已获得多少 qun币」的通知。
-  // 用 ephemeral 回复：只有领取者自己看得到，不刷屏，且不会被别人误领。
-  await bot._patch(it, {
-    content: `🧧 您已获得 **${fmtNum(res.amount)} QUN**！\n余额：**${fmtNum(res.balance)} QUN**`,
-    components: [],
-  });
+  // 【用户明确要求】领取后收到「您已获得多少 QUN」的通知 → 私发，不刷屏
+  await R.ok(it, `🧧 您已获得 **${fmtNum(res.amount)} QUN**！\n当前余额：**${fmtNum(res.balance)} QUN**`);
 
-  // 领完就把卡片按钮下掉
-  if (res.done) {
-    const m = rp.get(id);
-    if (m && m.message_id) {
-      try {
+  /**
+   * 更新卡片按钮。
+   *
+   * 【为什么必须改】原来只在 res.done（全部领完）时才更新。
+   * 于是「没领完的红包」按钮一直可点 —— 用户点自己那份时
+   * rp.claim 抛「你已经领过了」，看起来就是「领取失败」，
+   * 而已领完的又因 message_id 缺失（PATCH 404）同样不生效。
+   *
+   * 现在每次领取后都更新：
+   *   - 全部领完 → 去掉按钮，文案改为「已被领完」
+   *   - 还有剩余 → 按钮改为 disabled，文案显示剩余份数
+   */
+  const m = rp.get(id);
+  if (m && m.message_id) {
+    try {
+      if (res.done) {
+        // 只去按钮，保留原图和「来自 @X 的一个红包」
         await bot.rest('PATCH', `/channels/${m.channel_id}/messages/${m.message_id}`, {
           components: [],
-          embeds: [{
-            title: '🧧 红包已被领完',
-            description: `**${fmtNum(m.amount_total)} QUN** / ${m.slots} 份 已全部领取`,
-            color: 0x808080,
+        });
+      } else {
+        /**
+         * 【这里绝不能设 disabled】
+         * 线上踩过：把按钮设成 disabled:true 想表达「你已领取」，
+         * 结果只有第一个人领得到，剩下所有人都点不动 ——
+         * 用户反馈「给多人发送的红包但只能领取一次」。
+         *
+         * 正确：按钮保持 enabled，由 rp.claim() 判定每人限领一次。
+         * 只有全部领完才禁用。
+         *
+         * ⚠️ 另外这里【只能有一个 components 键】。之前误写成两个，
+         * 后者覆盖前者，于是 disabled 的旧版本一直生效 —— 这就是
+         * 「改了代码却没生效」的原因。
+         */
+        const left = m.slots - m.claimed;      // 表字段是 claimed，不是 claimed_count
+        // 只改 components（按钮），不动 embeds / attachments ——
+        // PATCH 消息时若省略 embeds，原有的图片和文案都会消失。
+        await bot.rest('PATCH', `/channels/${m.channel_id}/messages/${m.message_id}`, {
+          components: [{
+            type: 1,
+            components: [{
+              type: 2,
+              style: 2,
+              label: `领取（剩 ${left} 份）`,
+              custom_id: 'hongbao:claim',
+              disabled: false,          // 还有份数就人人可点
+            }],
           }],
         });
-      } catch (e) { bot.log('[bot] 更新红包卡片失败: ' + e.message); }
-    }
+      }
+    } catch (e) { bot.log('[bot] 更新红包卡片失败: ' + e.message); }
   }
+  void d;
 }
 
 /* ---------- 注册 ---------- */
 
-/**
- * 建命令表 + 返回定义。
- * 组件 handler 以 '__component:' 为前缀，方便和指令名区分。
- */
-function buildCommands(botOpts) {
+function buildCommands(bot) {
   const cmds = new Map();
   cmds.set('balance', cmdBalance);
   cmds.set('checkin', cmdCheckin);
   cmds.set('leaderboard', cmdLeaderboard);
   cmds.set('help', cmdHelp);
   cmds.set('hongbao', cmdHongbao);
-  cmds.set('boom', async (it) => {
-    await botOpts.bot._reply(it, { content: `点击开始游戏 → ${botOpts.activityUrl}`, ephemeral: true });
-  });
-  cmds.set('activity', async (it) => {
-    await botOpts.bot._reply(it, { content: `点击开始游戏 → ${botOpts.activityUrl}`, ephemeral: true });
-  });
+  cmds.set('boom', cmdOpen);
+  cmds.set('activity', cmdOpen);
   cmds.set('__component:hongbao', onClaimButton);
+  // 模板挂在 bot 上：指令里统一用 R_(bot).*，不再各写各的
+  bot.responder = new Responder(bot);
   return cmds;
 }
 
-module.exports = { buildCommands, commandDefs, cmdBalance, cmdCheckin, cmdLeaderboard, cmdHelp, cmdHongbao, onClaimButton, fmtNum, CN_NUM, nowIso };
+module.exports = {
+  buildCommands, commandDefs,
+  cmdBalance, cmdCheckin, cmdLeaderboard, cmdHelp, cmdHongbao, cmdOpen, onClaimButton,
+  fmtNum, ensureUser, actorUser, HELP_LINES,
+};

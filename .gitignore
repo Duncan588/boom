@@ -23,6 +23,14 @@ data/
 # 运行时日志
 boom.log
 
+# ⚠️ 连接真实 Discord / 生产数据库的验证脚本
+# verify-bot-live.js 会 db.init() 打开生产 SQLite，并用真实 Bot Token 发 REST 请求。
+# 它不是单元测试，放进仓库等于把生产访问路径公开。
+# 需要时在服务器上手动跑，不要提交。
+test/verify-bot-live.js
+test/tmp-*.js
+test/*-probe.js
+
 # 编辑器 / 系统
 .vscode/
 .idea/

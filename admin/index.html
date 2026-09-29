@@ -19,6 +19,15 @@ body { font-size: 14px; }
 .kpi b { display: block; font-family: var(--mono); font-size: 25px; font-weight: 800; line-height: 1.15; }
 .kpi small { display: block; font-size: 11.5px; color: var(--fg-3); margin-top: 4px; }
 
+/* 分布表表头：三列宽度必须和下面 w6-row 的输入框对齐 */
+.w6-head { display: flex; gap: 6px; margin-bottom: 6px; font-size: 12px; color: var(--fg-3); font-weight: 600; }
+.w6-head .w6-h { width: 78px; }
+.w6-head .w6-h:nth-child(3) { width: 78px; }
+.w6-head .w6-h:nth-child(4) { width: 96px; }
+.w6-row .f { width: 78px; }
+.w6-row .f:nth-child(4) { width: 96px; }
+.w6-row .f:nth-child(5) { width: auto; flex: 1; }
+.w6-row .f:nth-child(6) { width: 34px; }
 .tabs { display: flex; gap: 5px; margin-bottom: 16px; flex-wrap: wrap; }
 .tabs .tab { flex: none; padding: 9px 16px; border-radius: 10px; background: var(--surface); border: 1px solid var(--stroke); color: var(--fg-2); font: inherit; font-weight: 650; cursor: pointer; }
 .tabs .tab.on { background: var(--blurple); border-color: var(--blurple); color: #fff; }
@@ -302,25 +311,69 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
   <!-- 设置 -->
   <div class="panel" id="p-settings">
     <div class="box">
-      <h3>爆点赔率控制（还原原版四种模式）</h3>
+      <h3>爆点赔率控制</h3>
       <div class="row">
         <div class="f">
           <label>赔率模式</label>
           <select class="inp" id="s_mode">
-            <option value="5">5 · 加权分布（推荐：平时小赢，偶尔爆发）</option>
-            <option value="4">4 · 区间随机（均匀分布，慎用）</option>
-            <option value="1">1 · 赢（池子越大爆点越高）</option>
-            <option value="2">2 · 输（压低爆点）</option>
-            <option value="3">3 · 平衡（抽水后维持）</option>
+            <option value="6">百分比分布表（推荐）</option>
+            <option value="5">加权分布（旧版，参数多）</option>
+            <option value="4">区间随机（旧版，均匀分布）</option>
+            <option value="1">旧版 1 · 赢</option>
+            <option value="2">旧版 2 · 输</option>
+            <option value="3">旧版 3 · 平衡</option>
           </select>
         </div>
-        <div class="f"><label>设定值 setValue（模式 1/2 用）</label><input class="inp" id="s_oddsval" type="number"></div>
-        <div class="f"><label>最低爆点 min_rate（决定最短逃跑窗口）</label><input class="inp" id="s_min" type="number" step="0.01"></div>
-        <div class="f"><label>最高爆点 max_rate</label><input class="inp" id="s_max" type="number" step="0.01"></div>
+        <div class="f"><label>最低爆点 min_rate（安全下限）</label><input class="inp" id="s_min" type="number" step="0.01"></div>
+        <div class="f"><label>最高爆点 max_rate（安全上限）</label><input class="inp" id="s_max" type="number" step="0.01"></div>
       </div>
 
-      <!-- 模式 5：三段加权分布。模式 4 是均匀分布（1.1x 和 50x 概率一样），
-           配成宽区间会导致高倍率局过多；模式 5 才是「平时小赢、偶尔来一发大的」。 -->
+      <!--
+        模式 6：百分比分布表。
+
+        【用户 2026-09-30 确认的最终形态：三列都手填】
+        每行三个数：下界 / 上界 / 次数占比，一眼能懂，不用推导。
+        示例（用户原始需求）：
+          下界  上界  次数
+          1.5   10    ← 「1.5x 以下算瞬爆，出现 10 次」
+          10    40    ← 「1.5–10x，出现 40 次」
+          30    30
+          50    10
+          80    5
+          100   5
+        次数全部加起来 = 100（100 局里的次数），不是概率公式。
+
+        【历史包袱已删除】band_min / band_max / base_random / setValue /
+        机器人下注上下限 —— test/odds-field-audit.js 实测（6 万局）：
+        这些字段在模式下【完全不影响倍率分布】，是模式 1/2/3/4 的遗产。
+        留着只会让人困惑「填了以谁为准」。
+      -->
+      <div class="panel-sub" id="w6Panel">
+        <b>百分比分布表</b>
+        <span class="hint">每行三个数：<b>下界</b>（从几倍开始）、<b>上界</b>（到几倍为止）、
+        <b>次数</b>（100 局里出现几次）。全部次数加起来 = 100。
+        段内的倍率在「下界」到「上界」之间随机。
+        <b>下界越低飞得越快</b>：1.00x 刚起飞就炸、1.5x 约 2.5 秒、2.00x 约 4.4 秒。
+        想让玩家逃不掉，就把那一段的下界调到 1.00 附近。</span>
+      </div>
+      <div id="w6Body">
+        <div class="w6-head">
+          <span class="w6-h">下界</span>
+          <span class="w6-h">上界</span>
+          <span class="w6-h">次数</span>
+          <span class="w6-h"></span>
+          <span class="w6-h"></span>
+        </div>
+        <div id="w6Rows"></div>
+        <div class="row" style="margin-top:6px">
+          <div class="f" style="max-width:200px"><button class="btn" id="btnAddRow">+ 加一行</button></div>
+          <div class="f" style="max-width:200px"><button class="btn" id="btnDelRow">− 删最后一行</button></div>
+          <div class="f" style="flex:1"><label>合计（必须 = 100）</label><input class="inp" id="s_w6sum" type="text" readonly></div>
+        </div>
+        <div id="w6Preview" class="hint" style="margin:6px 0 2px"></div>
+      </div>
+
+      <!-- 模式 5：三段加权分布（老配置，保留兼容） -->
       <div class="panel-sub" id="w5Panel">
         <b>模式 5 · 加权分布</b>
         <span class="hint">按权重决定落在哪一段倍率，段内再随机。权重不必等于 100，按比例分配即可。<b>瞬爆</b>命中时火箭刚起飞就炸（约 0.2 秒），且不受最低爆点与最低飞行时长保护。</span>
@@ -345,20 +398,22 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
       </div>
       <div id="w5Preview" class="hint" style="margin:6px 0 2px"></div>
 
-      <div class="row">
-        <div class="f"><label>区间下限 band_min</label><input class="inp" id="s_bmin" type="number" step="0.01"></div>
-        <div class="f"><label>区间上限 band_max</label><input class="inp" id="s_bmax" type="number" step="0.01"></div>
-        <div class="f"><label>无下注随机幅度</label><input class="inp" id="s_baserand" type="number" step="0.01"></div>
-        <div class="f"><label>平台抽成 rake_percent</label><input class="inp" id="s_rake" type="number" step="0.01"></div>
-      </div>
-      <div class="row">
-        <div class="f"><label>后台资金池 pool_balance</label><input class="inp" id="s_pool" type="number" step="0.01"></div>
-        <div class="f"><label>机器人下注下限</label><input class="inp" id="s_rmin" type="number"></div>
-        <div class="f"><label>机器人下注上限</label><input class="inp" id="s_rmax" type="number"></div>
-      </div>
       <p style="color:var(--fg-3);font-size:12.5px;margin:8px 0 0">
-        提示：最低爆点 1.10x ≈ 0.25 秒窗口；1.50x ≈ 1.0 秒；2.00x ≈ 1.74 秒。低于 1.5x 玩家很难点逃跑。
+        提示：1.10x ≈ 0.25 秒窗口；1.50x ≈ 1.0 秒；2.00x ≈ 1.74 秒。低于 1.5x 玩家很难点逃跑。
       </p>
+      <!--
+        【已删除的字段 —— 2026-09-30】
+        test/odds-field-audit.js 用 6 万局实测确认，在模式 6 下这些字段
+        对倍率分布【零影响】，是模式 1/2/3/4 的历史遗产：
+          band_min / band_max   改成 3–7，分布零变化
+          base_random           0.9 → 5，分布零变化
+          setValue              只被模式 1/2 读取
+          rake_percent          只影响抽水与模式 3
+          pool_balance          只影响模式 1/2/3 与派奖
+          机器人下注上下限       30 个游戏机器人已全部停用
+        保留会让运营困惑「填了以谁为准」。若日后要恢复旧模式，
+        数据库里这些 setting 仍在，代码分支也还在，只是后台不再暴露入口。
+      -->
       <button class="btn btn-primary" id="btnSaveOdds" style="margin-top:10px">保存赔率设置</button>
     </div>
 
@@ -406,6 +461,10 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
 </div>
 
 <script>
+/* 构建标记：部署后刷新页面看这行就能确认是不是新版。
+   值由部署脚本替换；没替换时显示 HTML 的最后修改时间。 */
+var BUILD = '__BUILD__';
+document.title && (document.title += ' · ' + BUILD);
 var T = null;
 function $(s){return document.querySelector(s);}
 /* 注意：必须接收选择器参数。原实现忽略参数返回全部元素，导致 tab/panel 切换失效 */
@@ -738,12 +797,12 @@ function loadSettings(){
     $('#s_announce').value=s.announce||'';
     // 赔率
     $('#s_mode').value=s.odds_mode||'5';
-    $('#s_oddsval').value=s.odds_value||0;
+    /* odds_value / band_* / base_random / rake / pool / robot_* 已从界面删除
+       （test/odds-field-audit.js 实测在模式 6 下零作用）。
+       仍需读取 min_rate / max_rate —— 它们是安全护栏，见下。 */
     $('#s_min').value=s.min_rate||1.10;
     $('#s_max').value=s.max_rate||50;
-    $('#s_bmin').value=s.band_min||1.10;
-    $('#s_bmax').value=s.band_max||3.00;
-    $('#s_baserand').value=s.base_random||0.90;
+
     // 模式 5 加权参数
     $('#s_wlow').value=s.w_low!=null?s.w_low:50;
     $('#s_wmid').value=s.w_mid!=null?s.w_mid:22;
@@ -759,11 +818,14 @@ function loadSettings(){
     $('#s_whimax').value=s.w_high_max||30.00;
     $('#s_wtopmin').value=s.w_top_min||30.00;
     $('#s_wtopmax').value=s.w_top_max||50.00;
+    // 模式 6 的百分比表：回填已保存的配置（没有则用默认样例）
+    try{
+      var t6 = JSON.parse(s.odds_table_json||'null');
+      if (Array.isArray(t6) && t6.length) W6_DEFAULT = t6;
+    }catch(_){ /* 坏 JSON 保持默认 */ }
+    w6RenderRows();
     syncW5();
-    $('#s_rake').value=s.rake_percent||0.03;
-    $('#s_pool').value=s.pool_balance||0;
-    $('#s_rmin').value=s.robot_bet_min||10;
-    $('#s_rmax').value=s.robot_bet_max||200;
+
     // 活动
     try{ EVENTS=JSON.parse(s.events_json||'[]'); }catch(_){ EVENTS=[]; }
     if(!Array.isArray(EVENTS))EVENTS=[];
@@ -775,17 +837,13 @@ $('#btnSaveSet').onclick=function(){
     site_name:$('#s_name').value, signup_bonus:$('#s_signup').value, announce:$('#s_announce').value
   }).then(function(){toast('站点设置已保存','ok');loadStats();});
 };
-// 模式 5 参数块：仅在选中模式 5 时显示，并在改参数时实时预览分布。
-// 后台改赔率是「盲调」—— 填完数字才知道效果。这里直接算出爆点分布，
-// 免得配完跑一天才发现高倍率局还是太多。
-function syncW5(){
+/* 模式 5 的实际预览逻辑（由 syncW5 调度调用）。
+ * ⚠️ 这个函数体很长（一百多行做 4 万次抽样），
+ *    所以必须独立成一个函数，不能和调度逻辑混在一起 ——
+ *    之前两者缠在一起时，我加新功能把函数体截断了，
+ *    导致整个 script 少一个 '}'，后台直接白屏。 */
+function syncW5Inner(){
   var on = $('#s_mode').value === '5';
-  $('#w5Panel').style.display = on ? '' : 'none';
-  ['s_wlow','s_wmid','s_whigh','s_wtop','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax','s_wtopmin','s_wtopmax']
-    .forEach(function(id){
-      var el = document.getElementById(id);
-      if (el) el.closest('.f').style.display = on ? '' : 'none';
-    });
   if (!on) return;
 
   var num = function(id, d){ var v = parseFloat($('#'+id).value); return isFinite(v) && v > 0 ? v : d; };
@@ -843,29 +901,359 @@ function syncW5(){
     '预览（4 万次模拟）　中位 <b>' + med.toFixed(2) + 'x</b>　平均 <b>' + avg.toFixed(2) + 'x</b>　'
     + '10x+ <b>' + over10p.toFixed(1) + '%</b>　' + notes.join('　') + '<br>' + bars;
 }
-$('#s_mode').onchange = syncW5;
-['s_wlow','s_wmid','s_whigh','s_wtop','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax','s_wtopmin','s_wtopmax','s_min','s_max']
-  .forEach(function(id){
-    var el = document.getElementById(id);
-    if (el) el.addEventListener('input', syncW5);
+/* ---------- 模式 6：百分比分布表 ---------- */
+/**
+ * 赔率配置简化的核心（用户 2026-09-29 要求）。
+ * 旧模式 5 要填 14 个数字（5 权重 + 9 端点），改完看不出效果。
+ * 这里改成「每行：到多少倍 + 占多少%」，加总 100% 即可。
+ */
+/**
+ * 默认分布表 —— 就是用户 2026-09-30 提的需求原样：
+ *   1.5x 以下算瞬爆，出现 10 次
+ *   1.5–10x  40 次
+ *   10–30x   30 次
+ *   30–50x   10 次
+ *   50–80x    5 次
+ *   80–100x   5 次
+ *
+ * 【没有「☐ 瞬爆」勾选了】
+ * 原版低倍率局本来就飞得极短（1.00x → 0ms），
+ * 是我之前加的 2500ms 保底把那个行为抹平了，才不得不加勾选去绕过。
+ * 保底已删，现在「瞬爆」完全由下界决定。
+ */
+var W6_DEFAULT = [
+  { min: 1.00, max: 1.5, pct: 10 },
+  { min: 1.5,  max: 10,  pct: 40 },
+  { min: 10,   max: 30,  pct: 30 },
+  { min: 30,   max: 50,  pct: 10 },
+  { min: 50,   max: 80,  pct: 5  },
+  { min: 80,   max: 100, pct: 5  }
+];
+
+function w6Read(){
+  var host = document.getElementById('w6Rows');
+  if (!host) return [];
+  var out = [];
+  host.querySelectorAll('[data-i]').forEach(function(row){
+    var loEl = row.querySelector('[data-f="min"]');
+    var hiEl = row.querySelector('[data-f="max"]');
+    var pcEl = row.querySelector('[data-f="pct"]');
+    out.push({
+      min:  loEl ? parseFloat(loEl.value) : null,
+      max:  hiEl ? parseFloat(hiEl.value) : NaN,
+      pct:  pcEl ? parseFloat(pcEl.value) : NaN
+    });
   });
+  return out;
+}
+
+function w6Load(rows){
+  var host = document.getElementById('w6Rows');
+  if (rows && rows.length) W6_DEFAULT = rows;
+  w6RenderRows();
+}
+
+/**
+ * 把倍率区间的飞行时长说成人话。
+ *
+ * 【为什么需要】
+ * 用户 2026-09-30 问「瞬爆是什么意思、我加它干什么」。
+ * 根因是我给所有局加了 2500ms 保底飞行时长，把原版的低倍率瞬爆抹平了，
+ * 只好加一个「☐ 瞬爆」勾选去绕过自己加的保底。
+ * 保底已删除（恢复原版行为），勾选框也一并删掉。
+ *
+ * 现在直接把「这一段飞多久」写出来 —— 用户填下界时能立刻知道
+ * 玩家有没有时间点逃跑，不需要再理解「瞬爆」这个概念。
+ */
+function w6FlightMs(rate){
+  var r = Math.max(1, Number(rate) || 1);
+  var disc = 40 * r - 24;
+  if (disc < 0) return 0;
+  return Math.round(((Math.sqrt(disc) - 4) / 2) * 1000);
+}
+function w6FlightText(lo, hi){
+  var a = w6FlightMs(lo), b = w6FlightMs(hi);
+  var fmt = function(ms){
+    if (ms <= 0) return '瞬爆';
+    if (ms < 1000) return ms + 'ms';
+    return (ms / 1000).toFixed(1) + 's';
+  };
+  if (lo >= 1 && a === b) return fmt(a);
+  return fmt(a) + '~' + fmt(b);
+}
+
+/**
+ * 渲染分布表（用户 2026-09-30 确认的最终形态：三列都手填）
+ *
+ * 每行 = 下界 / 上界 / 次数 / 瞬爆勾选 / 删除
+ * 下界【也是手填的】，不再从上一行推导 —— 用户明确要求每行独立可控。
+ */
+function w6RenderRows(){
+  var arr = W6_DEFAULT;
+  var host = document.getElementById('w6Rows');
+  if (!host) return;
+  var html = '';
+  arr.forEach(function(r, i){
+    var lo = (r.min != null) ? r.min : (i === 0 ? (parseFloat($('#s_min').value) || 1.00) : arr[i-1].max);
+    html += '<div class="row w6-row" style="gap:6px;margin-bottom:4px" data-i="'+i+'">'
+      + '<div class="f" style="max-width:78px"><input class="inp" data-f="min" type="number" step="0.01" value="'+lo+'" title="这一段从几倍开始"></div>'
+      + '<div class="f" style="max-width:78px"><input class="inp" data-f="max" type="number" step="0.01" value="'+r.max+'" title="这一段到几倍为止"></div>'
+      + '<div class="f" style="max-width:78px"><input class="inp" data-f="pct" type="number" min="0" max="100" step="1" value="'+r.pct+'" title="100 局里出现几次"></div>'
+      + '<div class="f" style="flex:1;font-size:12px;color:var(--fg-3)">'
+        + lo + ' – ' + r.max + 'x　（飞 ' + w6FlightText(lo, r.max) + '）</div>'
+      + '<div class="f" style="max-width:34px"><button class="btn" data-del="'+i+'" title="删这一行" style="padding:6px 9px">&times;</button></div>'
+      + '</div>';
+  });
+  host.innerHTML = html;
+  w6SyncSum();
+}
+
+/**
+ * 分布表校验（与 server/odds-validate.js 同一套规则）
+ * @returns {{ok:boolean, error?:string}}
+ */
+function w6Validate(rows){
+  if (!rows || !rows.length) return { ok: false, error: '分布表不能为空' };
+  var sum = 0, prevMax = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var hasMin = r.min != null && r.min !== '' && isFinite(r.min);
+    var lo = hasMin ? r.min : (i === 0 ? 0 : prevMax);
+    if (!isFinite(r.max) || r.max <= 0) return { ok:false, error:'第 ' + (i+1) + ' 行的上界无效' };
+    if (!isFinite(r.pct) || r.pct < 0) return { ok:false, error:'第 ' + (i+1) + ' 行的次数无效' };
+    if (r.max <= lo) {
+      return { ok:false, error:'第 ' + (i+1) + ' 行：上界 ' + r.max + 'x 必须大于下界 ' + lo + 'x' };
+    }
+    if (r.max <= prevMax) {
+      return { ok:false, error:'第 ' + (i+1) + ' 行的上界 ' + r.max + 'x 必须大于上一行的 ' + prevMax + 'x（行不能交叉）' };
+    }
+    sum += r.pct;
+    prevMax = r.max;
+  }
+  if (Math.abs(sum - 100) > 0.05) {
+    return { ok:false, error:'次数合计 ' + sum.toFixed(1) + '，必须等于 100' };
+  }
+  return { ok: true };
+}
+
+function w6SyncSum(){
+  var arr = w6Read();
+  var sum = arr.reduce(function(a, x){ return a + (parseFloat(x.pct) || 0); }, 0);
+  var el = document.getElementById('s_w6sum');
+  el.value = sum.toFixed(1) + (Math.abs(sum - 100) < 0.05 ? ' ✓' : ' ✗ 需等于 100');
+  el.style.color = Math.abs(sum - 100) < 0.05 ? 'var(--ok)' : 'var(--err)';
+}
+
+$('#btnAddRow').onclick = function(){
+  // 新行的下界接上一行的上界（省得用户自己想该填几），上界默认 +10x
+  var last = W6_DEFAULT[W6_DEFAULT.length - 1] || { max: 1.5, pct: 100 };
+  W6_DEFAULT.push({
+    min:  last.max,
+    max:  Math.round((last.max + 10) * 100) / 100,
+    pct:  0
+  });
+  w6RenderRows(); w6Preview();
+};
+$('#btnDelRow').onclick = function(){
+  if (W6_DEFAULT.length > 1) { W6_DEFAULT.pop(); w6RenderRows(); w6Preview(); }
+};
+
+function w6Preview(){
+  var on = $('#s_mode').value === '6';
+  document.getElementById('w6Panel').style.display = on ? '' : 'none';
+  // 表格 + 按钮 + 合计 + 预览 统一由 w6Body 控制显隐，
+  // 避免 JS 分别改四个元素的 display 时出现遗漏（之前就漏过按钮）。
+  var body = document.getElementById('w6Body');
+  if (body) body.style.display = on ? '' : 'none';
+  void 0;
+  /**
+   * ⚠️ 这里【不能】在页面加载时就把按钮藏掉。
+   * w6Preview() 在 loadSettings() 之后就会被调用，而那时 s_mode 还是
+   * 数据库里的旧值（5），on=false → 按钮被 display:none。
+   * 用户切到模式 6 后 w6Preview() 会再跑一次把它们显示出来，所以最终
+   * 看起来没问题；但如果 syncW5 的渲染顺序稍有变化，按钮就会一直消失。
+   * 稳妥做法：交给 CSS 控制显隐（w6Panel 一起），JS 不单独改按钮。
+   */
+  void 0;
+  if (!on) return;
+
+  var arr = w6Read();
+  var sum = arr.reduce(function(a, x){ return a + (parseFloat(x.pct) || 0); }, 0);
+  w6SyncSum();
+
+  if (sum <= 0) { $('#w6Preview').innerHTML = '<span style="color:var(--err)">占比全为 0</span>'; return; }
+  if (Math.abs(sum - 100) > 0.05) {
+    $('#w6Preview').innerHTML = '<span style="color:var(--warn)">合计 ' + sum.toFixed(1)
+      + '%，将按比例归一化（建议调整为 100%）</span>';
+  }
+
+  // 实时预览：与服务端 tableRate() 完全一致的抽样逻辑
+  var N = 40000, r2 = Math.random, b = {}, sorted = [], sm = 0;
+  var keys = arr.map(function(r){ return r.min + '–' + r.max + 'x'; });
+  keys.forEach(function(k){ b[k] = 0; });
+  var tot = sum;
+  for (var i = 0; i < N; i++) {
+    var rr = r2() * tot, acc = 0, idx = 0;
+    for (var j = 0; j < arr.length; j++) { acc += arr[j].pct; if (rr < acc) { idx = j; break; } idx = j; }
+    var lo = arr[idx].min != null ? arr[idx].min : (idx === 0 ? 1.0 : arr[idx-1].max);
+    var v = lo + r2() * (arr[idx].max - lo);
+    sm += v; sorted.push(v);
+    b[keys[idx]]++;
+  }
+  sorted.sort(function(a, x){ return a - x; });
+  var avg = sm / N, med = sorted[Math.floor(N/2)];
+  // 「瞬爆」= 落在 1.5x 以下的局（没有任何保护，火箭刚起飞就炸）
+  // 不再是配置里的一个勾选项，而是由下界自然决定。
+  var boomPct = arr.reduce(function(a, r){
+    return a + (r.max <= 1.5 ? (r.pct || 0) : 0);
+  }, 0) / sum * 100;
+  var bars = keys.map(function(k){
+    var n = b[k], p = n / N * 100;
+    return '<span style="display:inline-block;margin-right:12px">' + k + ' ' + p.toFixed(1) + '%</span>';
+  }).join('');
+  var notes = [];
+  if (boomPct > 15) notes.push('<span style="color:var(--err)">⚠ 瞬爆 ' + boomPct.toFixed(0) + '%，挫败感强</span>');
+  if (avg > 30) notes.push('<span style="color:var(--err)">⚠ 平均 ' + avg.toFixed(1) + 'x 偏高，长期余额会涨</span>');
+  if (avg < 3) notes.push('<span style="color:var(--warn)">⚠ 平均仅 ' + avg.toFixed(1) + 'x，玩家余额会缩水</span>');
+  if (!notes.length) notes.push('<span style="color:var(--ok)">分布合理</span>');
+  $('#w6Preview').innerHTML = '预览（4 万次模拟）　中位 <b>' + med.toFixed(2) + 'x</b>　平均 <b>' + avg.toFixed(2)
+    + 'x</b>　瞬爆 <b>' + boomPct.toFixed(1) + '%</b>　' + notes.join('　') + '<br>' + bars;
+}
+
+// 表格内任一输入变化 → 同步到 W6_DEFAULT，刷新合计与预览
+document.getElementById('w6Rows').addEventListener('input', function(e){
+  var row = e.target.closest('[data-i]');
+  if (!row) return;
+  var i = parseInt(row.dataset.i, 10);
+  if (!W6_DEFAULT[i]) return;
+  var lo = row.querySelector('[data-f="min"]');
+  if (lo) W6_DEFAULT[i].min = parseFloat(lo.value);
+  W6_DEFAULT[i].max  = parseFloat(row.querySelector('[data-f="max"]').value);
+  W6_DEFAULT[i].pct  = parseFloat(row.querySelector('[data-f="pct"]').value);
+  // 右侧说明文字跟着变（区间 + 飞行时长）
+  var note = row.querySelector('.f:nth-child(4)');
+  if (note) note.textContent = W6_DEFAULT[i].min + ' – ' + W6_DEFAULT[i].max + 'x　（飞 '
+    + w6FlightText(W6_DEFAULT[i].min, W6_DEFAULT[i].max) + '）';
+  w6SyncSum();
+  w6Preview();
+});
+// 每行的 × 按钮：删任意一行（原来只能删最后一行）
+document.getElementById('w6Rows').addEventListener('click', function(e){
+  var btn = e.target.closest('[data-del]');
+  if (!btn) return;
+  var i = parseInt(btn.getAttribute('data-del'), 10);
+  if (W6_DEFAULT.length <= 1) { toast('至少保留一行', 'err'); return; }
+  W6_DEFAULT.splice(i, 1);
+  w6RenderRows();
+  w6Preview();
+});
+$('#s_min').addEventListener('input', w6Preview);
+
+/* 调度：按当前模式显示对应面板，并触发预览 */
+function syncW5(){
+  var mode = $('#s_mode').value;
+  var on5 = mode === '5';
+  var w5 = document.getElementById('w5Panel');
+  if (w5) w5.style.display = on5 ? '' : 'none';
+  ['s_wlow','s_wmid','s_whigh','s_wtop','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax','s_wtopmin','s_wtopmax']
+    .forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) el.closest('.f').style.display = on5 ? '' : 'none';
+    });
+  if (on5) syncW5Inner();
+  /**
+   * 【修：切到模式 6 时必须先渲染表格】
+   * 之前只在 loadSettings() 里调 w6RenderRows()，而切换下拉走的是
+   * syncW5() —— 它只管显示/隐藏，从不渲染。
+   * 于是用户切到「6 · 百分比分布表」看到的是【空表 + 占比全为 0】，
+   * 预览里写「占比全为 0」也是因为表格根本没渲染出来。
+   * 线上 2026-09-29 用户反馈「切换没有用」就是这个。
+   */
+  if (mode === '6') w6RenderRows();
+  w6Preview();
+}
+
+/**
+ * 【修：下拉的 onchange 绑定丢了】
+ *
+ * 原实现是 `$('#s_mode').onchange = syncW5;` —— 一行。
+ * 我第一次给模式 6 加功能时，patch 把这一行连带周围的代码一起替换掉了，
+ * 于是下拉「能选、能改 value，但切换时不触发任何刷新」：
+ * 表格不渲染、面板不显隐，看起来就是「切换没有用」。
+ *
+ * 之前一直找不到原因，是因为我把注意力放在 syncW5 函数体上，
+ * 而问题在【函数外面那行绑定】。
+ */
+$('#s_mode').onchange = function(){
+  // 立即写库：用户选了就保存，不用再点「保存赔率设置」。
+  // 之前必须手动点保存，一旦忘了刷新就回到旧模式 ——
+  // 用户反馈「刷新后回到 5」正是这个原因。
+  var mode = this.value;
+  syncW5();
+  var body = { odds_mode: mode };
+  if (mode === '6') {
+    try { body.odds_table_json = JSON.stringify(w6Read()); } catch (_) {}
+  }
+  call('/admin/api/settings', body).then(function(r){
+    if (r && r.error) { toast('保存失败：' + r.error, 'err'); return; }
+    toast('已切换到' + (mode === '6' ? '百分比分布表' : '模式 ' + mode) + '，下一局生效', 'ok');
+  });
+};
 
 $('#btnSaveOdds').onclick=function(){
+  /**
+   * 【2026-09-30 简化后的保存体】
+   * 只提交还在界面上的字段。已删除的 band_min / band_max / base_random /
+   * rake_percent / pool_balance / robot_bet_min / robot_bet_max / odds_value
+   * 【不再提交】—— 避免用界面上的空值把数据库里旧模式的配置冲掉。
+   *
+   * ⚠️ 这里任何 $('s_xxx') 取不到元素都会抛 TypeError，
+   *    导致 call() 根本不执行 —— 表现为「点了保存没反应、数据库没变」。
+   *    2026-09-29 线上那次就是这么坏的。改动后务必跑
+   *    test/admin-w6-ui.js 第 11 组断言。
+   */
+  var mode = $('#s_mode').value;
+  var rows = (mode === '6') ? w6Read() : [];
+  if (mode === '6') {
+    /**
+     * 与 server/odds-validate.js 保持同一套规则。
+     * 这里先拦一次只是为了少一次请求往返；服务端还会再拦一次
+     * （防止绕过、防止浏览器缓存的旧页面）。
+     * 改规则时两边都要改 —— test/odds-validate.js 会验证服务端那份。
+     */
+    var bad = w6Validate(rows);
+    if (!bad.ok) { toast(bad.error, 'err'); return; }
+  }
   call('/admin/api/settings',{
-    odds_mode:$('#s_mode').value, odds_value:$('#s_oddsval').value,
+    odds_mode:mode,
     min_rate:$('#s_min').value, max_rate:$('#s_max').value,
-    band_min:$('#s_bmin').value, band_max:$('#s_bmax').value,
-    base_random:$('#s_baserand').value, rake_percent:$('#s_rake').value,
-    pool_balance:$('#s_pool').value,
     w_low:$('#s_wlow').value, w_mid:$('#s_wmid').value, w_high:$('#s_whigh').value,
     w_lo_min:$('#s_wlomin').value, w_lo_max:$('#s_wlomax').value,
     w_mid_min:$('#s_wmidmin').value, w_mid_max:$('#s_wmidmax').value,
     w_high_min:$('#s_whimin').value, w_high_max:$('#s_whimax').value,
     w_top_min:$('#s_wtopmin').value, w_top_max:$('#s_wtopmax').value,
     w_boom:$('#s_wboom').value, w_boom_max:$('#s_wboommax').value,
-    robot_bet_min:$('#s_rmin').value, robot_bet_max:$('#s_rmax').value
+    odds_table_json: rows.length ? JSON.stringify(rows) : ''
   }).then(function(r){
-    if(r.error)toast(r.error,'err'); else toast('赔率设置已保存，下一局生效','ok');
+    if(r.error){ toast(r.error,'err'); return; }
+    /**
+     * 【保存后必须告知是否生效】
+     * 用户 2026-09-29 反馈：「每次点完保存后都没有提示我配置是否生效」。
+     * 静默保存让人无法确认改动到底用上没有。
+     * 现在保存后立刻拉一次设置，用服务端真实值再模拟一遍，
+     * 弹出「已生效 + 实际分布」，而不是只说「已保存」。
+     */
+    /**
+     * 用服务端真实引擎再跑一遍确认 —— 前端预览是 JS 复刻的，
+     * 服务端 simulate() 跑的是真正 decideRate()，两者一致才算真的生效。
+     */
+    call('/admin/api/odds-preview?rounds=10000', null, 'GET').then(function(p){
+      if (p.error) { toast('已保存，但预览失败：' + p.error, 'err'); return; }
+      var top = p.buckets.slice().sort(function(a,b){ return b.count - a.count; })[0];
+      toast('已生效（下一局开始）　中位 ' + p.median + 'x　平均 ' + p.avg + 'x　瞬爆 ' + p.instantBoomPct + '%'
+            + '　最多：' + top.label + ' ' + top.pct + '%', 'ok');
+    }).catch(function(){ toast('已保存，下一局生效', 'ok'); });
+    loadSettings();
   });
 };
 

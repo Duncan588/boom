@@ -131,10 +131,45 @@ function serveStatic(res, rootDir, urlPath, { maxAge = 3600 } = {}) {
   try { st = fs.statSync(target); } catch (_) { return false; }
   if (st.isDirectory()) return false;
   const ext = path.extname(target).toLowerCase();
+
+  /**
+   * HTML 分支：注入构建标记 + 禁用缓存
+   *
+   * 1) Cache-Control 必须用 no-store，不能用 no-cache。
+   *    no-cache 的语义是「可以存，但每次用之前要问服务器」——
+   *    一旦验证请求失败（断网、代理、超时），浏览器就拿本地旧副本顶上，
+   *    用户看到几小时前的旧页面，而服务器上明明是新的。
+   *    2026-09-29 就因为这个，用户看到的还是白屏那版后台，
+   *    反复怀疑「部署没生效」，实际是浏览器缓存。
+   *
+   * 2) 注入 __BUILD__ → 文件 mtime。
+   *    页面标题会带上这串时间戳，以后一眼就能区分
+   *    「服务器确实是新的」和「我这边缓存了旧的」，不用再猜。
+   *    取 mtime 意味着不需要部署脚本配合，不会忘记更新。
+   */
+  if (ext === '.html') {
+    const stamp = st.mtime.toISOString().replace('T', ' ').slice(0, 19);
+    const stream = fs.createReadStream(target, { encoding: 'utf8' });
+    let buf = '';
+    stream.on('data', (c) => { buf += c; });
+    stream.on('end', () => {
+      const out = buf.replace(/__BUILD__/g, stamp);
+      const b = Buffer.from(out, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': MIME['.html'],
+        'Content-Length': b.length,
+        'Cache-Control': 'no-store, must-revalidate',
+      });
+      res.end(b);
+    });
+    stream.on('error', () => { try { res.end(); } catch (_) {} });
+    return true;
+  }
+
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
     'Content-Length': st.size,
-    'Cache-Control': ext === '.html' ? 'no-cache' : `public, max-age=${maxAge}`,
+    'Cache-Control': `public, max-age=${maxAge}`,
   });
   fs.createReadStream(target).pipe(res);
   return true;
