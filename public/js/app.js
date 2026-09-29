@@ -231,6 +231,16 @@
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); });
   }
   function fmt(n) { return (Math.round((n || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  // 余额过百万改用 K/M/B 缩写，避免「1,234,567.00」把界面撑开。
+  // 阈值：<10K 保持两位小数的完整写法；>=10K 用一位小数的缩写。
+  function fmtC(n) {
+    var v = Number(n) || 0;
+    var a = Math.abs(v);
+    if (a >= 1e9) return (v / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (a >= 1e4) return (v / 1e3).toFixed(1) + 'K';
+    return fmt(v);
+  }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
   function avatar(u) {
     if (!u) return '/assets/avatar-default.svg';
@@ -493,7 +503,7 @@
       .then(function (r) {
         if (!r.ok) throw new Error(r.j.error || '登录失败');
         S.me = r.j.user;
-        if (r.j.bonus) toast('欢迎！新人礼 +' + fmt(r.j.bonus) + ' QUN', 'ok');
+        if (r.j.bonus) toast('欢迎！新人礼 +' + fmtC(r.j.bonus) + ' QUN', 'ok');
         // 验证 cookie 真的生效：Discord 代理可能吞掉 Set-Cookie，
         // 不确认就 start() 会进到一个「看起来登录了但其实没有」的页面。
         return api('/api/me').then(function (chk) {
@@ -548,9 +558,9 @@
     if (!S.me) return;
     $('#meName').textContent = S.me.name || '玩家';
     $('#meAvatar').src = avatar(S.me);
-    $('#meCoins').textContent = fmt(S.me.coins);
+    $('#meCoins').textContent = fmtC(S.me.coins);
   }
-  function setCoins(c) { S.me.coins = c; $('#meCoins').textContent = fmt(c); }
+  function setCoins(c) { S.me.coins = c; $('#meCoins').textContent = fmtC(c); }
 
   /* ---------------- WebSocket ---------------- */
   function connectWS() {
@@ -589,7 +599,7 @@
   function onMsg(d) {
     switch (d.type) {
       case 'hello':
-        if (d.jackpot != null) $('#jackpot').textContent = fmt(d.jackpot);
+        if (d.jackpot != null) $('#jackpot').textContent = fmtC(d.jackpot);
         if (d.online != null) $('#onlineChip').textContent = '在线 ' + d.online;
         // 中途加入：把当前局完整恢复出来，而不是干等下一条 begin（看起来像假死）
         if (d.current) onJoinCurrent(d.current);
@@ -768,7 +778,7 @@
     S.round = c.gid;
     S.hasBet = false;
     S.escDone = false;
-    if (c.jackpot != null) $('#jackpot').textContent = fmt(c.jackpot);
+    if (c.jackpot != null) $('#jackpot').textContent = fmtC(c.jackpot);
 
     // 恢复本局玩家列表
     S.bets.clear();
@@ -806,7 +816,7 @@
     S.round = d.gid; S.phase = 'betting'; S.hasBet = false; S.escDone = false;
     S.bets.clear();
     $('#betsList').innerHTML = '<div class="bets-empty">等待玩家下注…</div>';
-    $('#jackpot').textContent = fmt(d.jackpot || 0);
+    $('#jackpot').textContent = fmtC(d.jackpot || 0);
     $('#boomTxt').hidden = true;
     $('#multVal').className = 'val num';
     $('#multLbl').textContent = '';
@@ -912,7 +922,7 @@
       S.escDone = true;
       setBetBtn();
       if (d.balance != null) setCoins(d.balance);
-      toast('逃跑成功！+' + fmt(row.pnl) + ' QUN', 'ok');
+      toast('逃跑成功！+' + fmtC(row.pnl) + ' QUN', 'ok');
       sfxEscape(Number(d.escape));
     } else {
       floatUp(row.name + ' @' + Number(d.escape).toFixed(2) + 'x');
@@ -932,7 +942,7 @@
     $('#multLbl').textContent = '本局结束';
     $('#phase').textContent = '下一局准备中…';
     if (chart) chart.setState({ status: 'over', sec: (S.flightMs || 0) / 1000, rate: Number(d.boom) || 0, scale: S.cfg.flightScale || 2.5, boom: Number(d.boom) || 0 });
-    if (d.jackpot != null) $('#jackpot').textContent = fmt(d.jackpot);
+    if (d.jackpot != null) $('#jackpot').textContent = fmtC(d.jackpot);
     sfxBoom();
     sfxResult(!!S.escDone);      // 赢了走扬调，输了走降调
     document.querySelector('.stage').style.animation = 'shake .4s';
@@ -983,7 +993,7 @@
       var id = 'bet-' + String(r.id).replace(/[^\w-]/g, '');
       var row = box.querySelector('#' + id);
       var rate = r.rate ? Number(r.rate).toFixed(2) + 'x' : '—';
-      var pnl = r.win ? '+' + fmt(r.pnl) : (r.lose ? '-' + fmt(r.bet) : '—');
+      var pnl = r.win ? '+' + fmtC(r.pnl) : (r.lose ? '-' + fmtC(r.bet) : '—');
       var cls = 'bets-row' + (r.win ? ' win' : '') + (r.lose ? ' lose' : '') + (r.me ? ' me' : '');
 
       if (!row) {
@@ -993,7 +1003,7 @@
         el.className = cls;
         el.innerHTML = '<div class="who"><img src="' + esc(r.avatar || '/assets/robot.svg') + '" alt=""><span>' + esc(r.name) + '</span></div>'
           + '<div class="num rate">—</div>'
-          + '<div class="num">' + fmt(r.bet) + '</div>'
+          + '<div class="num">' + fmtC(r.bet) + '</div>'
           + '<div class="num pnl">—</div>';
         box.appendChild(el);
         row = el;
@@ -1232,7 +1242,7 @@
           + '<div style="width:26px;text-align:center;font-size:16px">' + medal + '</div>'
           + '<img src="' + esc(avatar(u)) + '" alt="">'
           + '<div class="t"><b>' + esc(u.name) + '</b><small>' + u.bets + ' 局</small></div>'
-          + '<div class="r"><b>' + fmt(u.coins) + '</b><small>QUN 余额</small></div>'
+          + '<div class="r"><b>' + fmtC(u.coins) + '</b><small>QUN 余额</small></div>'
           + '</div>';
       }
       sheet('排行榜 · QUN 余额', html);
@@ -1253,7 +1263,7 @@
         + '</div>'
         + '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 2px;border-top:1px solid var(--stroke)">'
         + '<span style="font-size:13.5px;color:var(--fg-2)">已获得奖励</span>'
-        + '<b class="num" style="color:var(--qun)">+' + fmt(r.j.totalEarned) + ' QUN</b></div>';
+        + '<b class="num" style="color:var(--qun)">+' + fmtC(r.j.totalEarned) + ' QUN</b></div>';
       if (r.j.invitees.length) {
         html += '<div style="margin-top:8px">';
         for (var i = 0; i < r.j.invitees.length; i++) {
@@ -1306,9 +1316,9 @@
       for (var i = 0; i < rows.length; i++) { total += rows[i].profit || 0; if (rows[i].status === 1) wins++; }
       var html = '';
       html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:16px">'
-        + statCard(fmt(S.me.coins), 'QUN 余额')
+        + statCard(fmtC(S.me.coins), 'QUN 余额')
         + statCard(String(rows.length), '总下注局数')
-        + statCard((total >= 0 ? '+' : '') + fmt(total), '累计盈亏', total >= 0 ? 'pos' : 'neg')
+        + statCard((total >= 0 ? '+' : '') + fmtC(total), '累计盈亏', total >= 0 ? 'pos' : 'neg')
         + '</div>';
       html += '<button class="btn btn-qun btn-block btn-lg" id="btnCheckin" style="margin-bottom:10px">'
         + '<img class="qun-ic" src="/assets/qun.png" alt=""> 每日签到 +' + (S.cfg.checkinCoins || 100) + ' QUN</button>';
@@ -1321,8 +1331,8 @@
         var win = b.status === 1;
         html += '<div class="lrow"><div class="t"><b>#' + b.round_id + ' ' + (win ? '逃跑' : '爆掉') + '</b>'
           + '<small>' + esc(b.created_at) + '</small></div>'
-          + '<div class="r"><b class="' + (b.profit >= 0 ? 'pos' : 'neg') + '">' + (b.profit >= 0 ? '+' : '') + fmt(b.profit) + '</b>'
-          + '<small>投入 ' + fmt(b.amount) + (b.escape_rate ? ' @' + Number(b.escape_rate).toFixed(2) + 'x' : '') + '</small></div></div>';
+          + '<div class="r"><b class="' + (b.profit >= 0 ? 'pos' : 'neg') + '">' + (b.profit >= 0 ? '+' : '') + fmtC(b.profit) + '</b>'
+          + '<small>投入 ' + fmtC(b.amount) + (b.escape_rate ? ' @' + Number(b.escape_rate).toFixed(2) + 'x' : '') + '</small></div></div>';
       }
       sheet('我的', html);
 

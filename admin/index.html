@@ -330,6 +330,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f"><label>中段权重 w_mid（%）</label><input class="inp" id="s_wmid" type="number" min="0" step="1"></div>
         <div class="f"><label>高段权重 w_high（%）</label><input class="inp" id="s_whigh" type="number" min="0" step="1"></div>
         <div class="f"><label>瞬爆权重 w_boom（%）</label><input class="inp" id="s_wboom" type="number" min="0" step="1"></div>
+        <div class="f"><label>爆段权重 w_top（%）</label><input class="inp" id="s_wtop" type="number" min="0" step="1"></div>
       </div>
       <div class="row">
         <div class="f"><label>低段下限</label><input class="inp" id="s_wlomin" type="number" step="0.01"></div>
@@ -338,6 +339,8 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f"><label>中段上限</label><input class="inp" id="s_wmidmax" type="number" step="0.01"></div>
         <div class="f"><label>高段下限</label><input class="inp" id="s_whimin" type="number" step="0.01"></div>
         <div class="f"><label>高段上限</label><input class="inp" id="s_whimax" type="number" step="0.01"></div>
+        <div class="f"><label>爆段下限</label><input class="inp" id="s_wtopmin" type="number" step="0.01"></div>
+        <div class="f"><label>爆段上限</label><input class="inp" id="s_wtopmax" type="number" step="0.01"></div>
         <div class="f"><label>瞬爆上限（1.00 ~ 此值）</label><input class="inp" id="s_wboommax" type="number" step="0.01"></div>
       </div>
       <div id="w5Preview" class="hint" style="margin:6px 0 2px"></div>
@@ -412,6 +415,14 @@ function toast(m,k){var d=document.createElement('div');d.className='toast '+(k|
 function call(p,b,m){return fetch(p,{method:m||'POST',headers:b?{'Content-Type':'application/json'}:{},
   body:b?JSON.stringify(b):undefined,credentials:'same-origin'}).then(function(r){return r.json();});}
 function f2(n){return (Math.round((n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+// 余额/金额过百万用 K/M/B 缩写（玩家侧 fmtC 的同款规则）
+function f2c(n){
+  var v=Number(n)||0, a=Math.abs(v);
+  if(a>=1e9)return (v/1e9).toFixed(2)+'B';
+  if(a>=1e6)return (v/1e6).toFixed(2)+'M';
+  if(a>=1e4)return (v/1e3).toFixed(1)+'K';
+  return f2(v);
+}
 function av(u){return u.avatar||'/assets/avatar-default.svg';}
 
   /* ---- 登录（Discord OAuth2） ---- */
@@ -569,11 +580,11 @@ function loadStats(){
   call('/admin/api/stats',null,'GET').then(function(s){
     $('#kpis').innerHTML=
       kpi(s.users,'玩家总数',s.newToday+' 今日新增')+
-      kpi(f2(s.coinsInCirculation),'流通 QUN')+
+      kpi(f2c(s.coinsInCirculation),'流通 QUN')+
       kpi(s.bets,'总下注局数',s.online+' 人在线')+
-      kpi(f2(s.wagered),'累计投入',s.wageredToday?'今日 '+f2(s.wageredToday):'')+
+      kpi(f2c(s.wagered),'累计投入',s.wageredToday?'今日 '+f2c(s.wageredToday):'')+
       kpi(s.escapeRate+'%','逃跑成功率',s.escaped+'逃 / '+s.boomed+'爆')+
-      kpi(f2(s.jackpot),'展示奖池');
+      kpi(f2c(s.jackpot),'展示奖池');
   });
 }
 function kpi(v,l,sub){return '<div class="kpi"><b>'+v+'</b><small>'+l+'</small>'+
@@ -589,7 +600,7 @@ function loadUsers(){
       var u=r.list[i];
       h+='<tr><td><img src="'+av(u)+'"><b>'+esc(u.name)+'</b></td>'+
         '<td class="mono" style="font-size:12px;color:var(--fg-3)">'+u.discordId+'</td>'+
-        '<td class="mono"><b>'+f2(u.coins)+'</b></td>'+
+        '<td class="mono"><b>'+f2c(u.coins)+'</b></td>'+
         '<td class="mono">'+u.bets+'</td>'+
         '<td>'+(u.frozen?'<span style="color:var(--red)">已冻结</span>':'<span style="color:var(--green)">正常</span>')+'</td>'+
         '<td style="font-size:12px;color:var(--fg-3)">'+(u.lastSeen||u.createdAt||'')+'</td>'+
@@ -615,7 +626,7 @@ function bindUserBtns(){
         var v=prompt('给「'+b.dataset.n+'」增减 QUN，正数增加，负数扣除');
         if(v===null)return;
         call('/admin/api/user/coins',{userId:Number(id),amount:Number(v)}).then(function(r){
-          toast(r.ok?('新余额 '+f2(r.balance)):(r.error||'失败'),r.ok?'ok':'err');loadUsers();});
+          toast(r.ok?('新余额 '+f2c(r.balance)):(r.error||'失败'),r.ok?'ok':'err');loadUsers();});
       }else if(a==='log'){
         call('/admin/api/user/logs?userId='+id,null,'GET').then(function(r){
           var h='<div class="tw" style="max-height:52vh;overflow:auto"><table><thead><tr><th>时间</th><th>变动</th><th>余额</th><th>原因</th></tr></thead><tbody>';
@@ -641,7 +652,7 @@ $('#btnGrant').onclick=function(){
     var h='<div style="margin-top:10px">';
     for(var i=0;i<r.results.length;i++){var u=r.results[i];
       h+='<div style="padding:6px 0;font-size:13px">'+(u.ok?
-        '<span style="color:var(--green)">✓ '+(u.name||u.id)+' → '+f2(u.balance)+'</span>':
+        '<span style="color:var(--green)">✓ '+(u.name||u.id)+' → '+f2c(u.balance)+'</span>':
         '<span style="color:var(--red)">✗ '+(u.id)+(u.error?': '+u.error:'')+'</span>')+'</div>';}
     h+='</div>';
     $('#grantOut').innerHTML=h;toast('发放完成','ok');loadStats();
@@ -734,17 +745,20 @@ function loadSettings(){
     $('#s_bmax').value=s.band_max||3.00;
     $('#s_baserand').value=s.base_random||0.90;
     // 模式 5 加权参数
-    $('#s_wlow').value=s.w_low!=null?s.w_low:22;
-    $('#s_wmid').value=s.w_mid!=null?s.w_mid:48;
-    $('#s_whigh').value=s.w_high!=null?s.w_high:25;
-    $('#s_wboom').value=s.w_boom!=null?s.w_boom:5;
-    $('#s_wboommax').value=s.w_boom_max||1.04;
-    $('#s_wlomin').value=s.w_lo_min||1.10;
-    $('#s_wlomax').value=s.w_lo_max||1.70;
-    $('#s_wmidmin').value=s.w_mid_min||6.00;
-    $('#s_wmidmax').value=s.w_mid_max||15.00;
-    $('#s_whimin').value=s.w_high_min||15.00;
-    $('#s_whimax').value=s.w_high_max||50.00;
+    $('#s_wlow').value=s.w_low!=null?s.w_low:50;
+    $('#s_wmid').value=s.w_mid!=null?s.w_mid:22;
+    $('#s_whigh').value=s.w_high!=null?s.w_high:20;
+    $('#s_wtop').value=s.w_top!=null?s.w_top:2;
+    $('#s_wboom').value=s.w_boom!=null?s.w_boom:6;
+    $('#s_wboommax').value=s.w_boom_max||1.01;
+    $('#s_wlomin').value=s.w_lo_min||1.01;
+    $('#s_wlomax').value=s.w_lo_max||4.00;
+    $('#s_wmidmin').value=s.w_mid_min||4.00;
+    $('#s_wmidmax').value=s.w_mid_max||10.00;
+    $('#s_whimin').value=s.w_high_min||10.00;
+    $('#s_whimax').value=s.w_high_max||30.00;
+    $('#s_wtopmin').value=s.w_top_min||30.00;
+    $('#s_wtopmax').value=s.w_top_max||50.00;
     syncW5();
     $('#s_rake').value=s.rake_percent||0.03;
     $('#s_pool').value=s.pool_balance||0;
@@ -767,7 +781,7 @@ $('#btnSaveSet').onclick=function(){
 function syncW5(){
   var on = $('#s_mode').value === '5';
   $('#w5Panel').style.display = on ? '' : 'none';
-  ['s_wlow','s_wmid','s_whigh','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax']
+  ['s_wlow','s_wmid','s_whigh','s_wtop','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax','s_wtopmin','s_wtopmax']
     .forEach(function(id){
       var el = document.getElementById(id);
       if (el) el.closest('.f').style.display = on ? '' : 'none';
@@ -775,62 +789,62 @@ function syncW5(){
   if (!on) return;
 
   var num = function(id, d){ var v = parseFloat($('#'+id).value); return isFinite(v) && v > 0 ? v : d; };
-  var wb = num('s_wboom', 5);
-  var wl = num('s_wlow',22), wm = num('s_wmid',48), wh = num('s_whigh',25);
-  var boomMax = Math.max(1.001, num('s_wboommax', 1.04));
-  var loMin = num('s_wlomin',1.10), loMax = Math.max(loMin, num('s_wlomax',1.70));
-  var mdMin = num('s_wmidmin',6.00), mdMax = Math.max(mdMin, num('s_wmidmax',15.00));
-  var hiMin = num('s_whimin',15.00), hiMax = Math.max(hiMin, num('s_whimax',50.00));
+  var wb = num('s_wboom', 6);
+  var wl = num('s_wlow',50), wm = num('s_wmid',22), wh = num('s_whigh',20), wt = num('s_wtop',2);
+  var boomMax = Math.max(1.001, num('s_wboommax', 1.01));
+  var loMin = num('s_wlomin',1.01), loMax = Math.max(loMin, num('s_wlomax',4.00));
+  var mdMin = num('s_wmidmin',4.00), mdMax = Math.max(mdMin, num('s_wmidmax',10.00));
+  var hiMin = num('s_whimin',10.00), hiMax = Math.max(hiMin, num('s_whimax',30.00));
+  var tpMin = num('s_wtopmin',30.00), tpMax = Math.max(tpMin, num('s_wtopmax',50.00));
   var minRate = num('s_min',1.10), maxRate = Math.max(minRate, num('s_max',50));
 
-  var total = wb + wl + wm + wh;
+  var total = wb + wl + wm + wh + wt;
   if (total <= 0) { $('#w5Preview').innerHTML = '<span style="color:var(--err)">权重全为 0，无法生成爆点</span>'; return; }
 
-  // 与 server/game-logic.js weightedRate() 完全一致的四段取法（含瞬爆）
-  var N = 20000;
-  var b = {'瞬爆':0,'1.1-2x':0,'2-6x':0,'6-10x':0,'10-15x':0,'15x+':0};
-  var over10 = 0, sum = 0, sorted = [];
+  // 与 server/game-logic.js weightedRate() 完全一致的五段取法
+  var N = 40000;
+  var b = {'瞬爆':0,'1.02-4x':0,'4-10x':0,'10-30x':0,'30x+':0};
+  var sum = 0, sorted = [];
   for (var i = 0; i < N; i++) {
-    var r = Math.random() * total, v;
-    if (r < wb) v = 1.00 + Math.random() * (boomMax - 1.00);
+    var r = Math.random() * total, v, isBoom = r < wb;
+    if (isBoom) v = 1.00 + Math.random() * (boomMax - 1.00);
     else if (r < wb + wl) v = loMin + Math.random() * (loMax - loMin);
     else if (r < wb + wl + wm) v = mdMin + Math.random() * (mdMax - mdMin);
-    else v = hiMin + Math.random() * (hiMax - hiMin);
-    // 瞬爆段在引擎里会绕过 min_rate（decideRate 直接 return，不走 clamp），
-    // 预览必须照做，否则会显示成被 min_rate 顶到下限、看起来像「没生效」。
-    if (r < wb) v = Math.max(1, Math.min(v, maxRate));
+    else if (r < wb + wl + wm + wh) v = hiMin + Math.random() * (hiMax - hiMin);
+    else v = tpMin + Math.random() * (tpMax - tpMin);
+    // 瞬爆段在引擎里绕过 min_rate（decideRate 直接 return，不走 clamp），预览照做
+    if (isBoom) v = Math.max(1, Math.min(v, maxRate));
     else { if (v < minRate) v = minRate; if (v > maxRate) v = maxRate; }
     sum += v; sorted.push(v);
-    if (v >= 10) over10++;
-    if (v < 1.05) b['瞬爆']++;
-    else if (v < 2) b['1.1-2x']++;
-    else if (v < 6) b['2-6x']++;
-    else if (v < 10) b['6-10x']++;
-    else if (v < 15) b['10-15x']++;
-    else b['15x+']++;
+    if (v < 1.02) b['瞬爆']++;
+    else if (v < 4) b['1.02-4x']++;
+    else if (v < 10) b['4-10x']++;
+    else if (v < 30) b['10-30x']++;
+    else b['30x+']++;
   }
   sorted.sort(function(a, x){ return a - x; });
   var avg = sum / N, med = sorted[Math.floor(N/2)];
-  var over10p = over10 / N * 100, boomp = b['瞬爆'] / N * 100;
-  var flee2 = sorted.filter(function(v){ return v > 2; }).length / N * 100;
+  var per = function(n){ return n > 0 ? '每 ' + Math.round(N / n) + ' 局一次' : '—'; };
+
   var bars = Object.keys(b).map(function(k){
-    var p = b[k] / N * 100;
-    return '<span style="display:inline-block;margin-right:12px">' + k + ' ' + p.toFixed(1) + '%</span>';
+    var n = b[k], p = n / N * 100;
+    return '<span style="display:inline-block;margin-right:14px">' + k + ' ' + p.toFixed(1) + '%'
+      + '<span style="color:var(--fg-3)">（' + per(n) + '）</span></span>';
   }).join('');
 
   var notes = [];
-  if (med < 3 || med > 30) notes.push('<span style="color:var(--fg-3)">中位 ' + med.toFixed(1) + 'x 偏离常规区间</span>');
-  if (over10p > 70) notes.push('<span style="color:var(--err)">⚠ 10x+ 超过 70%，赢率很高</span>');
-  if (boomp > 15) notes.push('<span style="color:var(--err)">⚠ 瞬爆超过 15%，挫败感强</span>');
+  var over10p = (b['10-30x'] + b['30x+']) / N * 100;
+  if (over10p > 40) notes.push('<span style="color:var(--err)">⚠ 10x+ 超过 40%，赢率偏高</span>');
+  if (b['30x+'] / N * 100 > 5) notes.push('<span style="color:var(--err)">⚠ 30x+ 超过 5%，高倍率太频繁</span>');
+  if (b['瞬爆'] / N * 100 > 15) notes.push('<span style="color:var(--err)">⚠ 瞬爆超过 15%，挫败感强</span>');
   if (!notes.length) notes.push('<span style="color:var(--ok)">分布合理</span>');
 
   $('#w5Preview').innerHTML =
-    '预览（2 万次模拟）　中位 <b>' + med.toFixed(2) + 'x</b>　平均 <b>' + avg.toFixed(2) + 'x</b>　' +
-    '瞬爆 <b>' + boomp.toFixed(1) + '%</b>　2x 逃成功 <b>' + flee2.toFixed(1) + '%</b>　' + notes.join('　') +
-    '<br>' + bars;
+    '预览（4 万次模拟）　中位 <b>' + med.toFixed(2) + 'x</b>　平均 <b>' + avg.toFixed(2) + 'x</b>　'
+    + '10x+ <b>' + over10p.toFixed(1) + '%</b>　' + notes.join('　') + '<br>' + bars;
 }
 $('#s_mode').onchange = syncW5;
-['s_wlow','s_wmid','s_whigh','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax','s_min','s_max']
+['s_wlow','s_wmid','s_whigh','s_wtop','s_wboom','s_wboommax','s_wlomin','s_wlomax','s_wmidmin','s_wmidmax','s_whimin','s_whimax','s_wtopmin','s_wtopmax','s_min','s_max']
   .forEach(function(id){
     var el = document.getElementById(id);
     if (el) el.addEventListener('input', syncW5);
@@ -847,6 +861,7 @@ $('#btnSaveOdds').onclick=function(){
     w_lo_min:$('#s_wlomin').value, w_lo_max:$('#s_wlomax').value,
     w_mid_min:$('#s_wmidmin').value, w_mid_max:$('#s_wmidmax').value,
     w_high_min:$('#s_whimin').value, w_high_max:$('#s_whimax').value,
+    w_top_min:$('#s_wtopmin').value, w_top_max:$('#s_wtopmax').value,
     w_boom:$('#s_wboom').value, w_boom_max:$('#s_wboommax').value,
     robot_bet_min:$('#s_rmin').value, robot_bet_max:$('#s_rmax').value
   }).then(function(r){

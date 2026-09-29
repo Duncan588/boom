@@ -139,12 +139,14 @@ function decideRate(cfg, pot, pool, event) {
     const hi = Math.max(lo, Number(cfg.band_max) || 3.00);
     rate = lo + Math.random() * (hi - lo);
   } else if (mode === '5') {
-    const r = weightedRate(cfg);
-    // 瞬爆（1.00~1.04）必须绕过 min_rate 下限保护 —— 它的全部意义就是
-    // 「不给逃跑窗口」。走正常 clamp 会被 min_rate(1.10) 顶回去，
-    // 玩家照样能等到 1.10 逃跑，瞬爆就名存实亡了。
-    if (r < min) return { rate: round2(r), fast: true, mode: '5-instant' };
-    rate = r;
+    const w = weightedRate(cfg);
+    // 只有「瞬爆段」才绕过 min_rate 下限保护 —— 它的全部意义就是不给逃跑窗口。
+    // 走正常 clamp 会被 min_rate 顶回去，玩家照样能等到下限逃跑，瞬爆就名存实亡。
+    //
+    // ⚠️ 必须用 weightedRate 返回的 boom 标记，不能用「r < min」反推：
+    // 低段下限（1.01）也可能低于 min_rate，那是正常低倍率局，不该被当成瞬爆。
+    if (w.boom) return { rate: round2(w.v), fast: true, mode: '5-instant' };
+    rate = w.v;
   }
 
   return { rate: clamp(rate), fast: false, mode };
@@ -159,45 +161,52 @@ function decideRate(cfg, pot, pool, event) {
  * 玩家每局都在 25x 附近逃跑，10 局净赚 5 倍本金 —— 赢率离谱地高。
  *
  * 均匀分布不适合「偶尔来一发大的、平时小赢」的手感。
- * 模式 5 改成三段加权：
- *   1) 按权重决定落在低/中/高哪一段（低倍率占大头）
+ * 模式 5 改成五段加权：
+ *   1) 按权重决定落在哪一段（低倍率占大头，高倍率稀有）
  *   2) 段内再均匀取值
  * 于是低倍率被大幅加权，高倍率稀有但存在。
  *
- * 默认参数（20 万局模拟：中位 10.32x，平均 13.53x，10x+ 占 51.8%，
- * 瞬爆 5.0%）：
- *   瞬爆  5% → 1.00–1.04x   「刚起飞就没」，绕过 min_rate 与最低飞行时长
- *   低段 22% → 1.10–1.70x   甜头区，保守玩家 2x 逃跑有 71.2% 成功率
- *   中段 48% → 6.00–15.00x  主赚区
- *   高段 25% → 15.00–50.00x 爆发区
+ * 默认参数（50 万局模拟）：
+ *   瞬爆  6% → 1.00–1.01x   刚起飞就没，绕过 min_rate 与最低飞行时长
+ *   低段 50% → 1.01–4.00x   日常区间
+ *   中段 22% → 4.00–10.00x
+ *   高段 20% → 10.00–30.00x 约 22 局来一次
+ *   爆段  2% → 30.00–50.00x 约 50 局来一次
  *
- * 玩家视角：2x 就逃 → 71.2% 成功；按住到 10x → 55.7% 成功。
- * 想要更稳就把 w_high 调小、w_mid 调大。
+ * 玩家视角：日常 1.01–10x，偶尔冲到 30x+，50x 是稀有事件。
+ * 想要更稳就把 w_high / w_top 调小、w_low 调大。
  */
 function weightedRate(cfg) {
   const num = (k, d) => {
     const v = Number(cfg[k]);
     return isFinite(v) && v > 0 ? v : d;
   };
-  const wLow = num('w_low', 62);
-  const wMid = num('w_mid', 28);
-  const wHigh = num('w_high', 10);
-  const loMin = num('w_lo_min', 1.10);
-  const loMax = Math.max(loMin, num('w_lo_max', 2.20));
-  const midMin = num('w_mid_min', 2.20);
-  const midMax = Math.max(midMin, num('w_mid_max', 6.00));
-  const highMin = num('w_high_min', 8.00);
-  const highMax = Math.max(highMin, num('w_high_max', 50.00));
-  // 瞬爆权重（0 = 关闭）。命中时爆点压到 1.00~1.04，即「刚起飞就没了」。
-  const wBoom = num('w_boom', 0);
-  const boomMax = Math.max(1.001, num('w_boom_max', 1.04));
+  // 五段权重：瞬爆 / 低 / 中 / 高 / 爆
+  const wBoom = num('w_boom', 6);
+  const wLow = num('w_low', 50);
+  const wMid = num('w_mid', 22);
+  const wHigh = num('w_high', 20);
+  const wTop = num('w_top', 2);
 
-  const total = wLow + wMid + wHigh + wBoom;
+  // 瞬爆：1.00 ~ boomMax（默认 1.01），刚起飞就没
+  const boomMax = Math.max(1.001, num('w_boom_max', 1.01));
+  // 常规四段，段内均匀
+  const loMin = num('w_lo_min', 1.01);
+  const loMax = Math.max(loMin, num('w_lo_max', 4.00));
+  const midMin = num('w_mid_min', 4.00);
+  const midMax = Math.max(midMin, num('w_mid_max', 10.00));
+  const highMin = num('w_high_min', 10.00);
+  const highMax = Math.max(highMin, num('w_high_max', 30.00));
+  const topMin = num('w_top_min', 30.00);
+  const topMax = Math.max(topMin, num('w_top_max', 50.00));
+
+  const total = wBoom + wLow + wMid + wHigh + wTop;
   const r = Math.random() * total;
-  if (r < wBoom) return 1.00 + Math.random() * (boomMax - 1.00);
-  if (r < wBoom + wLow) return loMin + Math.random() * (loMax - loMin);
-  if (r < wBoom + wLow + wMid) return midMin + Math.random() * (midMax - midMin);
-  return highMin + Math.random() * (highMax - highMin);
+  if (r < wBoom) return { v: 1.00 + Math.random() * (boomMax - 1.00), boom: true };
+  if (r < wBoom + wLow) return { v: loMin + Math.random() * (loMax - loMin) };
+  if (r < wBoom + wLow + wMid) return { v: midMin + Math.random() * (midMax - midMin) };
+  if (r < wBoom + wLow + wMid + wHigh) return { v: highMin + Math.random() * (highMax - highMin) };
+  return { v: topMin + Math.random() * (topMax - topMin) };
 }
 
 /** "HH:MM" → 当日分钟数；非法返回 null */

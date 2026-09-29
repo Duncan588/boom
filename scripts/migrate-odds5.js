@@ -25,15 +25,16 @@ const db = new DatabaseSync(path.resolve(dbPath));
 const cur = {};
 db.prepare('SELECT key, value FROM settings').all().forEach(r => { cur[r.key] = r.value; });
 
-// 中位 10x + 1.01 瞬爆（20 万局模拟：中位 10.32x，平均 13.53x，
-// 10x+ 占 51.8%，瞬爆 5.0%；2x 逃成功 71.2%，10x 逃成功 55.7%）
+// 五段加权（50 万局实测：平常 1.01–10x 占 78%，10–30x 占 20%（5 局一次），
+// 30x+ 占 2%（50 局一次），瞬爆占 6%（17 局一次），中位 3.64x）
 const PLAN = {
-  w_low: '22', w_mid: '48', w_high: '25',
-  w_lo_min: '1.10', w_lo_max: '1.70',
-  w_mid_min: '6.00', w_mid_max: '15.00',
-  w_high_min: '15.00', w_high_max: '50.00',
-  w_boom: '5', w_boom_max: '1.04',
-  max_rate: '50',
+  w_boom: '6', w_low: '50', w_mid: '22', w_high: '20', w_top: '2',
+  w_boom_max: '1.01',
+  w_lo_min: '1.01', w_lo_max: '4.00',
+  w_mid_min: '4.00', w_mid_max: '10.00',
+  w_high_min: '10.00', w_high_max: '30.00',
+  w_top_min: '30.00', w_top_max: '50.00',
+  max_rate: '50', min_rate: '1.10',
 };
 // 只有 --force 才动 odds_mode（它决定了整局节奏，不该被迁移脚本悄悄改掉）
 if (FORCE) PLAN.odds_mode = '5';
