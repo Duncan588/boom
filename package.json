@@ -1,0 +1,18 @@
+{
+  "name": "baodian",
+  "version": "1.0.0",
+  "description": "爆点逃跑 - Discord 社区小游戏 (Node.js + SQLite)",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "reset": "node server/reset.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

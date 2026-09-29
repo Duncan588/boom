@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#0B0D14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>爆点逃跑</title>
+<link rel="stylesheet" href="/css/base.css?v=26">
+<link rel="stylesheet" href="/css/game.css?v=26">
+<link rel="icon" href="/assets/qun.png">
+</head>
+<body>
+  <!-- 背景音乐：原版 index.html 第 59 行同名同源文件，MD5 一致 -->
+  <audio src="/assets/sound/bgmusic.mp3" id="bgm" loop preload="auto"></audio>
+
+<!-- ============ 登录 ============ -->
+<div class="auth" id="auth" hidden>
+  <div class="inner">
+    <div class="logo">🚀</div>
+    <h1>爆点逃跑</h1>
+    <p>用 Discord 登录，随时报到领 QUN，<br>在火箭爆炸前跑掉，赢下你的倍率。</p>
+    <div class="feat">
+      <span class="chip">🎁 每日签到</span>
+      <span class="chip">👥 邀好友得 QUN</span>
+      <span class="chip">🪙 零充值</span>
+    </div>
+    <p id="authMsg" style="min-height:20px;font-size:13px;color:var(--fg-3)"></p>
+    <button class="btn btn-primary btn-lg btn-block" id="btnDiscord">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="currentColor"><path d="M20.32 4.57A19.79 19.79 0 0 0 15.43 3c-.24.42-.51.99-.7 1.44a18.3 18.3 0 0 0-5.46 0c-.19-.45-.47-1.02-.71-1.44a19.74 19.74 0 0 0-4.89 1.57C.56 9.2-.3 13.7.13 18.15A19.9 19.9 0 0 0 6.15 21c.49-.66.92-1.37 1.29-2.1-.71-.27-1.39-.6-2.03-.98.17-.13.34-.26.5-.4a14.2 14.2 0 0 0 12.18 0c.16.14.33.27.5.4-.64.38-1.32.71-2.03.98.37.73.8 1.44 1.29 2.1a19.87 19.87 0 0 0 6.02-2.85c.5-5.15-.84-9.6-3.55-13.58ZM8.02 15.42c-1.18 0-2.15-1.08-2.15-2.4 0-1.32.95-2.4 2.15-2.4 1.21 0 2.17 1.08 2.15 2.4 0 1.32-.95 2.4-2.15 2.4Zm7.96 0c-1.18 0-2.15-1.08-2.15-2.4 0-1.32.95-2.4 2.15-2.4 1.21 0 2.17 1.08 2.15 2.4 0 1.32-.94 2.4-2.15 2.4Z"/></svg>
+      使用 Discord 登录
+    </button>
+    <div class="note" style="text-align:left;margin-top:20px">
+      QUN 仅用于游戏内娱乐积分，<b>不可充值、不可提现、不可兑换任何现实价值</b>。
+    </div>
+  </div>
+</div>
+
+<!-- ============ 游戏 ============ -->
+<div class="app" id="app" hidden>
+
+  <div class="hdr">
+    <div class="me">
+      <img id="meAvatar" src="/assets/avatar-default.svg" alt="">
+      <div class="nm" id="meName">加载中…</div>
+    </div>
+    <div class="wallet">
+      <img class="qun-ic" src="/assets/qun.png" alt="">
+      <span class="num" id="meCoins">0</span>
+    </div>
+    <!-- 两个独立开关：背景音乐 / 音效 -->
+    <button class="icon-btn" id="btnBgm" title="背景音乐">🎵</button>
+    <button class="icon-btn" id="btnSfx" title="音效">🔊</button>
+  </div>
+
+  <div class="cols">
+    <!-- 左：舞台 -->
+    <div class="stage">
+      <div class="jackpot">
+        <img class="qun-ic" src="/assets/qun.png" alt="" style="width:17px;height:17px">
+        奖池 <span class="amt num" id="jackpot">0</span>
+      </div>
+
+      <div class="gauge" id="gauge">
+        <canvas id="chart"></canvas>
+        <!-- 弹幕层：消息从图表左侧飘到右侧，浮在曲线上方 -->
+        <div class="danmaku" id="danmaku" aria-hidden="true"></div>
+        <!-- 火箭：尾部锚点压在曲线尖上，机身沿 45° 斜向前方伸出 -->
+        <img class="rocket" id="rocket" src="/assets/img/rocket.png" alt="" hidden>
+        <div class="boom-fx" id="boomFx" hidden><img src="/assets/img/rocket_boom.jpg" alt=""></div>
+        <div class="mult" id="mult">
+          <div>
+            <div class="val num" id="multVal">1.00</div>
+            <div class="lbl" id="multLbl">准备中</div>
+          </div>
+        </div>
+        <div class="boom-txt" id="boomTxt" hidden><div><b>爆炸</b><span id="boomRate"></span></div></div>
+        <div class="floats" id="floats"></div>
+      </div>
+
+      <div class="event-banner" id="eventBanner" hidden>
+        <span class="dot"></span><b id="eventName">限时活动</b>
+        <span class="rng" id="eventRange"></span>
+      </div>
+
+      <div class="phase" id="phase">连接中…</div>
+
+      <div class="betbar">
+        <div class="stepper">
+          <button id="minus" aria-label="减少">−</button>
+          <div class="val">
+            <img class="qun-ic" src="/assets/qun.png" alt="">
+            <input id="betAmt" class="bet-input" type="text" inputmode="numeric"
+                   autocomplete="off" aria-label="下注金额" value="10">
+          </div>
+          <button id="plus" aria-label="增加">+</button>
+        </div>
+        <div class="bet-actions">
+          <button class="btn btn-sm" id="btnMin">最小</button>
+          <button class="btn btn-sm" id="btnMax">最大</button>
+        </div>
+      </div>
+
+      <button class="btn btn-lg act-btn bet" id="actBtn" disabled>连接中…</button>
+
+      <div style="height:10px"></div>
+      <div class="bets-head"><span>玩家</span><span>逃跑</span><span>投入</span><span>盈亏</span></div>
+      <div class="bets" id="betsList"><div class="bets-empty">等待玩家下注…</div></div>
+    </div>
+
+    <!-- 右：弹幕 + 最近开奖 -->
+    <div>
+      <div class="stage chat-stage" style="padding:14px 12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;position:relative;z-index:1">
+          <b style="font-size:14px">直播弹幕</b>
+          <span class="chip" id="onlineChip">在线 0</span>
+        </div>
+        <div class="chat" id="chatList"></div>
+        <form class="chat-input" id="chatForm">
+          <input id="chatText" maxlength="120" placeholder="说点什么…" autocomplete="off">
+          <button class="btn btn-sm" type="submit" id="chatSend">发送</button>
+        </form>
+      </div>
+
+      <div class="stage" style="padding:14px 12px;margin-top:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;position:relative;z-index:1">
+          <b style="font-size:14px">最近开奖</b>
+        </div>
+        <div id="history" style="max-height:220px;overflow-y:auto;position:relative;z-index:1"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 底部导航 ============ -->
+<div class="nav" id="nav" hidden>
+  <div class="tabs">
+    <button class="tab on" data-tab="game"><span class="ic">🚀</span>游戏</button>
+    <button class="tab" data-tab="rank"><span class="ic">🏆</span>排行</button>
+    <button class="tab" data-tab="invite"><span class="ic">👥</span>邀友</button>
+    <button class="tab" data-tab="me"><span class="ic">👤</span>我的</button>
+  </div>
+</div>
+
+<!-- ============ 面板 ============ -->
+<div class="sheet" id="sheet" hidden>
+  <div class="card">
+    <div class="grab"></div>
+    <h3 id="sheetTitle">标题</h3>
+    <div class="body" id="sheetBody"></div>
+    <button class="btn btn-block" style="margin-top:14px" id="sheetClose">关闭</button>
+  </div>
+</div>
+
+<script src="/js/chart.js?v=26"></script>
+<script src="/js/app.js?v=26"></script>
+</body>
+</html>

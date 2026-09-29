@@ -1,0 +1,36 @@
+# 依赖与构建产物
+node_modules/
+*.log
+
+# 部署打包临时文件
+push-*.tar.gz
+*.tgz
+
+# ⚠️ 凭据与运行时数据 —— 绝对不要提交
+# .env 里是 Discord Bot Token / OAuth Secret / 管理员白名单
+.env
+.env.*
+!.env.example
+
+# SQLite 数据库（node:sqlite）
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+../data/
+
+# 运行时日志
+boom.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Playwright / 测试产物
+.playwright-mcp/
+test-results/
+*.png
+!docs/screenshots/*.png

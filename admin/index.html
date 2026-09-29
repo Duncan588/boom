@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0D14">
+<title>爆点逃跑 · 后台</title>
+<link rel="stylesheet" href="/css/base.css">
+<style>
+body { font-size: 14px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 60px; }
+.top { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.top h1 { font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
+.top .sp { flex: 1; }
+.pill { padding: 5px 12px; border-radius: 999px; background: var(--surface); border: 1px solid var(--stroke); font-size: 12.5px; color: var(--fg-2); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px,1fr)); gap: 11px; margin-bottom: 20px; }
+.kpi { padding: 15px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--stroke); }
+.kpi b { display: block; font-family: var(--mono); font-size: 25px; font-weight: 800; line-height: 1.15; }
+.kpi small { display: block; font-size: 11.5px; color: var(--fg-3); margin-top: 4px; }
+
+.tabs { display: flex; gap: 5px; margin-bottom: 16px; flex-wrap: wrap; }
+.tabs .tab { flex: none; padding: 9px 16px; border-radius: 10px; background: var(--surface); border: 1px solid var(--stroke); color: var(--fg-2); font: inherit; font-weight: 650; cursor: pointer; }
+.tabs .tab.on { background: var(--blurple); border-color: var(--blurple); color: #fff; }
+
+.panel { display: none; }
+.panel.on { display: block; }
+.box { padding: 16px; border-radius: var(--r); background: var(--surface); border: 1px solid var(--stroke); margin-bottom: 14px; }
+.box h3 { font-size: 15px; font-weight: 750; margin-bottom: 12px; }
+.row { display: flex; gap: 9px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 11px; }
+/* ══════════════════════════════════════════════════════════
+   输入框 —— 唯一样式来源
+   ------------------------------------------------------------
+   ⚠️ 曾经两次翻车，都是因为"新写一套类、忘了旧的那套"：
+      ① `.fl` 写进 HTML 但 CSS 里根本没这个类 → 浏览器默认纯白
+      ② `.fgrow input { width:100% }` 只定宽度 → 还是浏览器默认纯白
+      ③ 去箭头只写在 `.fi[type=number]` 上，而设置页 19 个数字框用的是
+         `.inp` → 上下箭头全都在
+   所以规则：**控件外观只允许在下面这一处定义**，
+   `.inp` 和 `.fi` 都套同一套属性，新页面只写 class，不写外观。
+   ══════════════════════════════════════════════════════════ */
+.inp, .fi, select.inp, select.fi {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; min-width: 0;
+  min-height: 42px; padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(0,0,0,.34);
+  border: 1.5px solid var(--stroke-2);
+  color: var(--fg);
+  font: inherit; font-size: 13.5px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.inp:hover, .fi:hover, select.inp:hover, select.fi:hover { border-color: rgba(255,255,255,.26); }
+.inp:focus, .fi:focus, select.inp:focus, select.fi:focus {
+  outline: none;
+  border-color: var(--blurple);
+  background: rgba(0,0,0,.5);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blurple) 24%, transparent);
+}
+.inp::placeholder, .fi::placeholder { color: var(--fg-3); font-weight: 500; }
+.inp:disabled, .fi:disabled { opacity: .5; cursor: not-allowed; }
+.inp.mono, .fi.mono { font-family: var(--mono); font-size: 12.5px; }
+
+/* 数字框：删掉上下微调箭头（用户要求：改为直接输入，不做上下步进） */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: none; }
+
+/* select：appearance:none 会吃掉原生箭头，补一个 SVG，并保证下拉面板深色 */
+select.inp, select.fi {
+  padding-right: 32px; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%236C7590' d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+select.inp option, select.fi option { background: #171B2A; color: var(--fg); font-weight: 600; }
+
+textarea.inp { min-height: 74px; font-family: var(--mono); font-size: 12.5px; resize: vertical; width: 100%; }
+
+/* 横向字段行 + 字段容器 */
+.f { display: flex; flex-direction: column; gap: 5px; }
+.f label { font-size: 11.5px; color: var(--fg-3); font-weight: 600; }
+.frow { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.fgrow { display: flex; flex-direction: column; gap: 6px; flex: 1 1 190px; min-width: 0; }
+.fgrow > label { font-size: 11.5px; color: var(--fg-3); font-weight: 650; letter-spacing: .01em; }
+
+/* 开关：轨道和文字必须是【两个元素】。
+   之前 .sw span 既是 42px 滑块又是文字容器，文字被压在滑块里显示成
+   "启" / "用" 两行。这里拆成 .sw-track（轨道）+ .sw-txt（文字）。 */
+.sw { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; flex: none; }
+.sw input { position: absolute; opacity: 0; width: 0; height: 0; }
+.sw-track {
+  position: relative; flex: none;
+  width: 40px; height: 23px; border-radius: 999px;
+  background: rgba(255,255,255,.10);
+  border: 1.5px solid var(--stroke-2);
+  transition: background .18s ease, border-color .18s ease;
+}
+.sw-track::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--fg-2);
+  transition: transform .18s cubic-bezier(.2,.9,.3,1), background .18s ease;
+}
+.sw input:checked + .sw-track { background: var(--blurple); border-color: var(--blurple); }
+.sw input:checked + .sw-track::after { transform: translateX(17px); background: #fff; }
+.sw input:focus-visible + .sw-track { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blurple) 32%, transparent); }
+.sw-txt { font-size: 12.5px; font-weight: 700; color: var(--fg-3); white-space: nowrap; }
+.sw input:checked ~ .sw-txt { color: var(--fg); }
+
+/* 活动插件行 */
+.act-row {
+  padding: 14px 15px; margin-bottom: 10px;
+  border-radius: 12px;
+  background: rgba(0,0,0,.24);
+  border: 1px solid var(--stroke);
+}
+.act-row:last-child { margin-bottom: 0; }
+.act-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 11px; }
+.act-txt { flex: 1 1 200px; min-width: 0; }
+.act-txt b { display: block; font-size: 14.5px; font-weight: 750; }
+.act-txt small { display: block; font-size: 12.5px; color: var(--fg-3); margin-top: 2px; line-height: 1.45; }
+.act-row .fi { margin-bottom: 8px; }
+.act-row .btn-sm { min-height: 34px; }
+
+/* 状态胶囊（每日活动） */
+.status-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.status-row .pill b { color: var(--fg); font-weight: 750; }
+.status-row .pill.on { border-color: color-mix(in srgb, var(--blurple) 55%, transparent);
+                       background: color-mix(in srgb, var(--blurple) 16%, transparent); }
+.status-row .pill.on b { color: #cdd4ff; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 9px 8px; font-size: 11.5px; color: var(--fg-3); font-weight: 700; border-bottom: 1px solid var(--stroke); white-space: nowrap; }
+td { padding: 9px 8px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: middle; }
+td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; margin-right: 8px; background: var(--bg-2); }
+.tw { overflow-x: auto; }
+.mono { font-family: var(--mono); }
+.empty { text-align: center; color: var(--fg-3); padding: 30px; }
+.login { min-height: 100dvh; display: grid; place-items: center; padding: 20px; }
+/* [hidden] 必须能压过 .login/.panel 的 display，否则登录层常驻 */
+[hidden] { display: none !important; }
+.login .card { width: 100%; max-width: 360px; padding: 26px; border-radius: var(--r-lg); background: var(--bg-1); border: 1px solid var(--stroke); }
+.login h1 { font-size: 22px; font-weight: 800; text-align: center; margin-bottom: 20px; }
+.login .f { margin-bottom: 12px; }
+.login .inp { width: 100%; }
+</style>
+</head>
+<body>
+
+<!-- 登录 -->
+<div class="login" id="login" hidden>
+  <div class="card">
+    <h1>🚀 爆点后台</h1>
+    <p style="color:var(--fg-2);font-size:13px;margin:8px 0 18px;text-align:center">使用 Discord 账号登录<br>仅白名单内的 ID 可访问</p>
+    <button class="btn btn-primary btn-block" id="btnLogin" style="margin-top:8px">使用 Discord 登录</button>
+    <p id="lerr" style="color:var(--red);font-size:13px;margin-top:10px;text-align:center"></p>
+  </div>
+</div>
+
+<!-- 主界面 -->
+<div class="wrap" id="main" hidden>
+  <div class="top">
+    <h1>🚀 爆点后台</h1>
+    <span class="pill" id="who">admin</span>
+    <div class="sp"></div>
+    <span class="pill" id="clock"></span>
+    <a class="btn" href="/" target="_blank">打开前台</a>
+    <button class="btn" id="btnOut">退出</button>
+  </div>
+
+  <div class="cards" id="kpis"></div>
+
+  <div class="tabs">
+    <button class="tab on" data-p="users">用户</button>
+    <button class="tab" data-p="grant">发放 QUN</button>
+    <button class="tab" data-p="bets">下注记录</button>
+    <button class="tab" data-p="rounds">开奖记录</button>
+    <button class="tab" data-p="robots">机器人</button>
+    <button class="tab" data-p="transfer">转账</button>
+    <button class="tab" data-p="activity">活动</button>
+    <button class="tab" data-p="settings">设置</button>
+  </div>
+
+  <!-- 转账管理 -->
+  <div class="panel" id="p-transfer">
+    <div class="box">
+      <h3>转账记录</h3>
+      <p style="color:var(--fg-2);font-size:12.5px;margin:-6px 0 14px">
+        QUN 仅为社区娱乐积分，不可充值、提现或兑换现实价值。
+      </p>
+      <div class="tw"><table>
+        <thead><tr><th>时间</th><th>转出方</th><th>接收方</th><th>金额</th><th>操作后余额</th></tr></thead>
+        <tbody id="trBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+      </table></div>
+    </div>
+    <div class="box">
+      <h3>管理员转账</h3>
+      <p style="color:var(--fg-2);font-size:12.5px;margin:-6px 0 14px">
+        管理员手动转账会写入双方流水，用于补发或纠正。
+      </p>
+      <div class="frow">
+        <div class="fgrow">
+          <label>收款方 Discord ID</label>
+          <input class="fi" id="tfTo" placeholder="例如 891196284998930522" autocomplete="off">
+        </div>
+        <div class="fgrow">
+          <label>金额（QUN）</label>
+          <input class="fi" id="tfAmt" type="number" min="1" step="1" placeholder="0" inputmode="decimal">
+        </div>
+      </div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" id="tfDo">确认转账</button>
+        <span id="tfMsg" style="font-size:13px"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 活动管理 -->
+  <div class="panel" id="p-activity">
+    <div class="box">
+      <h3>每日高倍活动（自动）</h3>
+      <p style="color:var(--fg-2);font-size:12.5px;margin:-6px 0 14px">
+        每天在设定时段内随机抽一小时自动开启，倍率区间内随机爆点；开始前 1 分钟会在 Discord 创建组织活动。
+      </p>
+      <div id="dailyBox"></div>
+    </div>
+    <div class="box">
+      <h3>小活动插件</h3>
+      <p style="color:var(--fg-2);font-size:12.5px;margin:-6px 0 14px">
+        代码在 <code>server/activities/</code>，新增活动只需加文件，此处开关即时生效。
+      </p>
+      <div id="actBox"></div>
+    </div>
+  </div>
+
+  <!-- 用户 -->
+  <div class="panel on" id="p-users">
+    <div class="box">
+      <div class="row">
+        <div class="f" style="flex:1"><label>搜索（昵称 / Discord ID）</label><input class="inp" id="uq" placeholder="输入关键词"></div>
+        <button class="btn btn-primary" id="btnSearch">搜索</button>
+      </div>
+      <div class="tw"><table>
+        <thead><tr><th>玩家</th><th>Discord ID</th><th>QUN</th><th>局数</th><th>状态</th><th>最近</th><th>操作</th></tr></thead>
+        <tbody id="usersBody"></tbody>
+      </table></div>
+    </div>
+  </div>
+
+  <!-- 发放 -->
+  <div class="panel" id="p-grant">
+    <div class="box">
+      <h3>批量发放 QUN</h3>
+      <div class="row">
+        <div class="f"><label>Discord ID（逗号分隔，可多个）</label><input class="inp" id="gIds" style="min-width:340px" placeholder="1234567890, 0987654321"></div>
+        <div class="f"><label>数量</label><input class="inp" id="gAmt" type="number" value="500" style="min-width:120px"></div>
+        <div class="f"><label>备注</label><input class="inp" id="gNote" placeholder="活动发放"></div>
+        <button class="btn btn-qun" id="btnGrant">发放</button>
+      </div>
+      <div class="row">
+        <div class="f" style="flex:1"><label>或：给所有用户各发（活动用）</label><input class="inp" id="gAll" type="number" placeholder="给每人发多少 QUN"></div>
+        <button class="btn" id="btnGrantAll">一键群发</button>
+      </div>
+      <div id="grantOut"></div>
+    </div>
+  </div>
+
+  <!-- 下注 -->
+  <div class="panel" id="p-bets"><div class="box"><div class="tw"><table>
+    <thead><tr><th>#</th><th>期号</th><th>玩家</th><th>投入</th><th>结果</th><th>倍率</th><th>盈亏</th><th>时间</th></tr></thead>
+    <tbody id="betsBody"></tbody></table></div></div></div>
+
+  <!-- 奖期 -->
+  <div class="panel" id="p-rounds"><div class="box"><div class="tw"><table>
+    <thead><tr><th>期号</th><th>爆点</th><th>下注数</th><th>奖池</th><th>状态</th><th>时间</th></tr></thead>
+    <tbody id="roundsBody"></tbody></table></div></div></div>
+
+  <!-- 机器人 -->
+  <div class="panel" id="p-robots">
+    <div class="box">
+      <div class="row">
+        <div class="f"><label>昵称</label><input class="inp" id="rName" placeholder="机器人昵称"></div>
+        <button class="btn btn-primary" id="btnAddRobot">添加</button>
+      </div>
+      <div class="tw"><table>
+        <thead><tr><th>ID</th><th>昵称</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="robotsBody"></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div class="panel" id="p-settings">
+    <div class="box">
+      <h3>爆点赔率控制（还原原版四种模式）</h3>
+      <div class="row">
+        <div class="f">
+          <label>赔率模式</label>
+          <select class="inp" id="s_mode">
+            <option value="4">4 · 区间随机（默认）</option>
+            <option value="1">1 · 赢（池子越大爆点越高）</option>
+            <option value="2">2 · 输（压低爆点）</option>
+            <option value="3">3 · 平衡（抽水后维持）</option>
+          </select>
+        </div>
+        <div class="f"><label>设定值 setValue（模式 1/2 用）</label><input class="inp" id="s_oddsval" type="number"></div>
+        <div class="f"><label>最低爆点 min_rate（决定最短逃跑窗口）</label><input class="inp" id="s_min" type="number" step="0.01"></div>
+        <div class="f"><label>最高爆点 max_rate</label><input class="inp" id="s_max" type="number" step="0.01"></div>
+      </div>
+      <div class="row">
+        <div class="f"><label>区间下限 band_min</label><input class="inp" id="s_bmin" type="number" step="0.01"></div>
+        <div class="f"><label>区间上限 band_max</label><input class="inp" id="s_bmax" type="number" step="0.01"></div>
+        <div class="f"><label>无下注随机幅度</label><input class="inp" id="s_baserand" type="number" step="0.01"></div>
+        <div class="f"><label>平台抽成 rake_percent</label><input class="inp" id="s_rake" type="number" step="0.01"></div>
+      </div>
+      <div class="row">
+        <div class="f"><label>后台资金池 pool_balance</label><input class="inp" id="s_pool" type="number" step="0.01"></div>
+        <div class="f"><label>机器人下注下限</label><input class="inp" id="s_rmin" type="number"></div>
+        <div class="f"><label>机器人下注上限</label><input class="inp" id="s_rmax" type="number"></div>
+      </div>
+      <p style="color:var(--fg-3);font-size:12.5px;margin:8px 0 0">
+        提示：最低爆点 1.10x ≈ 0.25 秒窗口；1.50x ≈ 1.0 秒；2.00x ≈ 1.74 秒。低于 1.5x 玩家很难点逃跑。
+      </p>
+      <button class="btn btn-primary" id="btnSaveOdds" style="margin-top:10px">保存赔率设置</button>
+    </div>
+
+    <div class="box">
+      <h3>限时活动（高倍场）</h3>
+      <p style="color:var(--fg-2);font-size:13px;margin-bottom:10px">
+        在指定时间段内随机高倍率。支持跨零点（如 23:00-01:00）。<b>weight</b> 越大越偏向高倍率。
+      </p>
+      <div class="tw"><table>
+        <thead><tr><th>启用</th><th>名称</th><th>开始</th><th>结束</th><th>最低倍</th><th>最高倍</th><th>权重</th><th></th></tr></thead>
+        <tbody id="evBody"></tbody>
+      </table></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="btnAddEv">+ 添加活动</button>
+        <button class="btn btn-primary" id="btnSaveEv">保存活动</button>
+      </div>
+      <p style="color:var(--fg-3);font-size:12.5px;margin-top:8px">
+        示例：19:00 - 22:00，最低 2x，最高 30x，权重 0.8 → 该时段大部分局落在 8x 以上。
+      </p>
+    </div>
+
+    <div class="box">
+      <h3>站点设置</h3>
+      <div class="row">
+        <div class="f"><label>站点名称</label><input class="inp" id="s_name"></div>
+        <div class="f"><label>新人礼 QUN</label><input class="inp" id="s_signup" type="number"></div>
+        <div class="f"><label>公告（留空不显示）</label><input class="inp" id="s_announce" style="min-width:260px"></div>
+      </div>
+      <button class="btn btn-primary" id="btnSaveSet">保存</button>
+    </div>
+    <div class="box">
+      <h3>签到机器人 API（供 discord.py 调用）</h3>
+      <p style="color:var(--fg-2);font-size:13px;line-height:1.7;margin-bottom:10px">
+        在 <code>.env</code> 里设置 <code>BOT_API_SECRET</code>，然后：<br>
+        <b>签到发币</b> <code>POST {location.origin}/api/bot/checkin</code><br>
+        <b>直接发放</b> <code>POST {location.origin}/api/bot/grant</code><br>
+        Header: <code>X-Bot-Secret: &lt;你的密钥&gt;</code>
+      </p>
+      <p style="color:var(--fg-3);font-size:12.5px">
+        checkin body: <code>{"discordId":"123","amount":100}</code> ·
+        grant body: <code>{"discordId":"123","amount":500,"reason":"活动"}</code>
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+var T = null;
+function $(s){return document.querySelector(s);}
+/* 注意：必须接收选择器参数。原实现忽略参数返回全部元素，导致 tab/panel 切换失效 */
+function $$(s){return Array.prototype.slice.call(document.querySelectorAll(s||'*'));}
+function toast(m,k){var d=document.createElement('div');d.className='toast '+(k||'');d.textContent=m;
+  document.body.appendChild(d);setTimeout(function(){d.remove();},2400);}
+function call(p,b,m){return fetch(p,{method:m||'POST',headers:b?{'Content-Type':'application/json'}:{},
+  body:b?JSON.stringify(b):undefined,credentials:'same-origin'}).then(function(r){return r.json();});}
+function f2(n){return (Math.round((n||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function av(u){return u.avatar||'/assets/avatar-default.svg';}
+
+  /* ---- 登录（Discord OAuth2） ---- */
+  // 已在前台登录且命中白名单 → 直接进后台，不用再登一次
+  $('#btnLogin').onclick=function(){location.href='/auth/login';};
+  $('#btnOut').onclick=function(){
+    call('/admin/api/logout',{}).then(function(){call('/api/auth/logout',{}).then(function(){location.href='/';});});
+  };
+/* ---- tabs ---- */
+$$('.tab[data-p]').forEach(function(t){t.onclick=function(){
+  $$('.tab[data-p]').forEach(function(x){x.classList.remove('on');});
+  t.classList.add('on');
+  $$('.panel').forEach(function(p){p.classList.remove('on');});
+  $('#p-'+t.dataset.p).classList.add('on');
+  load(t.dataset.p);
+};});
+
+function boot(){
+  call('/admin/api/me',null,'GET').then(function(r){
+    if(r.id)$('#who').textContent=r.name||r.id;
+  });
+  setInterval(function(){
+    var d=new Date();
+    $('#clock').textContent=d.toLocaleString('zh-CN',{hour12:false});
+  },1000);
+  load('users'); setInterval(function(){ if($('#p-users').classList.contains('on')) load('users'); },8000);
+}
+function load(p){
+  if(p==='users')return loadUsers();
+  if(p==='bets')return loadBets();
+  if(p==='rounds')return loadRounds();
+  if(p==='robots')return loadRobots();
+  if(p==='transfer')return loadTransfers();
+  if(p==='activity')return loadActivity();
+  if(p==='settings')return loadSettings();
+}
+
+/* ---- 转账记录 ---- */
+function loadTransfers(){
+  call('/admin/api/transfers',null,'GET').then(function(r){
+    var list=(r&&r.list)||[];
+    var b=$('#trBody');
+    if(!list.length){ b.innerHTML='<tr><td colspan="5" class="empty">还没有转账记录</td></tr>'; return; }
+    b.innerHTML=list.map(function(t){
+      return '<tr><td>'+esc(t.at)+'</td>'
+        +'<td>'+esc(t.fromName||'?')+'<br><small style="color:var(--fg-3)">'+esc(t.fromId)+'</small></td>'
+        +'<td>'+esc(t.toName||'?')+'<br><small style="color:var(--fg-3)">'+esc(t.toId)+'</small></td>'
+        +'<td style="color:var(--red);font-weight:700">−'+esc(t.amount)+'</td>'
+        +'<td>'+esc(t.balance)+'</td></tr>';
+    }).join('');
+  });
+}
+
+/* ---- 活动管理 ---- */
+function loadActivity(){
+  call('/admin/api/daily',null,'GET').then(function(d){
+    var box=$('#dailyBox');
+    if(!d){ box.innerHTML='<div class="empty">加载中…</div>'; return; }
+    var F=[
+      ['daily_enabled','启用（关掉则完全不自动开活动）','bool'],
+      ['daily_window_from','时段起（北京时间小时）','num'],
+      ['daily_window_to','时段止（不含，最晚取 to−1）','num'],
+      ['daily_min_rate','最低倍率','num'],
+      ['daily_max_rate','最高倍率','num'],
+      ['daily_weight','高倍偏置 0–1（越大越偏高倍）','num'],
+      ['daily_guild_id','Discord 服务器 ID','text'],
+      ['daily_channel_id','发布频道 ID','text'],
+      ['daily_announce','发频道播报','bool'],
+    ];
+    box.innerHTML='<div class="status-row">'
+      + '<span class="pill">今日抽中 <b>'+(d.todayHour==null?'—':d.todayHour+':00')+'</b></span>'
+      + '<span class="pill'+(d.active?' on':'')+'">状态 <b>'+(d.active?esc(d.active):'未开启')+'</b></span>'
+      + '<span class="pill">窗口 <b>'+esc(d.window)+'</b></span>'
+      + '<span class="pill">倍率 <b>'+esc(d.rate)+'</b></span>'
+      + '</div>'
+      + '<div class="frow">'+F.map(function(f){
+          var v=d.raw&&d.raw[f[0]]!=null?d.raw[f[0]]:'';
+          if(f[2]==='bool'){
+            return '<div class="fgrow"><label>'+esc(f[1])+'</label>'
+              +'<select class="fi" data-dk="'+f[0]+'"><option value="1"'+(v==='1'?' selected':'')+'>开启</option>'
+              +'<option value="0"'+(v==='1'?'':' selected')+'>关闭</option></select></div>';
+          }
+          return '<div class="fgrow"><label>'+esc(f[1])+'</label>'
+            +'<input class="fi" data-dk="'+f[0]+'" type="'+(f[2]==='num'?'number':'text')+'" value="'+esc(v)+'"></div>';
+        }).join('')+'</div>'
+      + '<button class="btn btn-primary" id="dailySave" style="margin-top:12px">保存每日活动设置</button>';
+    $('#dailySave').onclick=function(){
+      var body={};
+      $$('#dailyBox [data-dk]').forEach(function(el){ body[el.dataset.dk]=el.value; });
+      call('/admin/api/daily',body,'POST').then(function(r){
+        $('#dailyMsg').textContent='';
+        if(r&&r.ok) loadActivity();
+      });
+    };
+  });
+
+  call('/admin/api/activities',null,'GET').then(function(r){
+    var list=(r&&r.list)||[], params=(r&&r.params)||{};
+    var box=$('#actBox');
+    if(!list.length){ box.innerHTML='<div class="empty">没有已注册的活动</div>'; return; }
+    box.innerHTML=list.map(function(a){
+      var p=params[a.id];
+      return '<div class="act-row">'
+        + '<div class="act-head">'
+        + '<div class="act-txt"><b>'+esc(a.name)+'</b>'
+        + (a.description?'<small>'+esc(a.description)+'</small>':'')
+        + '</div>'
+        + '<label class="sw"><input type="checkbox" data-act="'+esc(a.id)+'"'+(a.enabled?' checked':'')+'>'
+        + '<span class="sw-track"></span><span class="sw-txt">'+(a.enabled?'已启用':'已停用')+'</span></label>'
+        + '</div>'
+        + '<input class="fi mono" data-ap="'+esc(a.id)+'" placeholder=\'参数 JSON，如 {"from":"20:00","to":"23:00"}\' value="'+esc(p?JSON.stringify(p):'')+'">'
+        + '<button class="btn btn-sm" data-save-act="'+esc(a.id)+'">保存参数</button>'
+        + '</div>';
+    }).join('');
+
+    $$('#actBox [data-act]').forEach(function(el){
+      el.onchange=function(){
+        call('/admin/api/activities/toggle',{id:el.dataset.act,enabled:el.checked},'POST')
+          .then(function(){ loadActivity(); });
+      };
+    });
+    $$('#actBox [data-save-act]').forEach(function(b){
+      b.onclick=function(){
+        var id=b.dataset.saveAct, raw=$('#actBox [data-ap="'+id+'"]').value.trim();
+        var obj={};
+        if(raw){ try{ obj=JSON.parse(raw); }catch(_){ $('#actMsg').textContent='参数不是合法 JSON'; return; } }
+        call('/admin/api/activities/params',(function(){var o={};o[id]=obj;return o;})(),'POST')
+          .then(function(){ loadActivity(); });
+      };
+    });
+  });
+}
+
+/* ---- 管理员转账 ---- */
+(function(){
+  var b=document.querySelector('#tfDo');
+  if(!b) return;
+  b.onclick=function(){
+    var to=$('#tfTo').value.trim();
+    var amt=Number($('#tfAmt').value);
+    var msg=$('#tfMsg');
+    if(!to){ msg.style.color='var(--red)'; msg.textContent='请填写收款方 Discord ID'; return; }
+    if(!(amt>0)){ msg.style.color='var(--red)'; msg.textContent='请输入有效金额'; return; }
+    if(!confirm('确认给 '+to+' 转账 '+amt+' QUN？')) return;
+    call('/admin/api/transfer',{to:to,amount:amt},'POST').then(function(r){
+      if(r&&r.ok){ msg.style.color='var(--green,#3ddc97)';
+        msg.textContent='已转账，对方余额 '+r.toBalance+' QUN';
+        $('#tfAmt').value=''; loadTransfers(); loadUsers(); }
+      else { msg.style.color='var(--red)'; msg.textContent=(r&&r.error)||'转账失败'; }
+    });
+  };
+})();
+
+function loadStats(){
+  call('/admin/api/stats',null,'GET').then(function(s){
+    $('#kpis').innerHTML=
+      kpi(s.users,'玩家总数',s.newToday+' 今日新增')+
+      kpi(f2(s.coinsInCirculation),'流通 QUN')+
+      kpi(s.bets,'总下注局数',s.online+' 人在线')+
+      kpi(f2(s.wagered),'累计投入',s.wageredToday?'今日 '+f2(s.wageredToday):'')+
+      kpi(s.escapeRate+'%','逃跑成功率',s.escaped+'逃 / '+s.boomed+'爆')+
+      kpi(f2(s.jackpot),'展示奖池');
+  });
+}
+function kpi(v,l,sub){return '<div class="kpi"><b>'+v+'</b><small>'+l+'</small>'+
+  (sub?'<small style="color:var(--fg-3);opacity:.75">'+sub+'</small>':'')+'</div>';}
+
+function loadUsers(){
+  loadStats();
+  var q=encodeURIComponent($('#uq').value||'');
+  call('/admin/api/users?q='+q,null,'GET').then(function(r){
+    if(!r.list){return;}
+    var h='';
+    for(var i=0;i<r.list.length;i++){
+      var u=r.list[i];
+      h+='<tr><td><img src="'+av(u)+'"><b>'+esc(u.name)+'</b></td>'+
+        '<td class="mono" style="font-size:12px;color:var(--fg-3)">'+u.discordId+'</td>'+
+        '<td class="mono"><b>'+f2(u.coins)+'</b></td>'+
+        '<td class="mono">'+u.bets+'</td>'+
+        '<td>'+(u.frozen?'<span style="color:var(--red)">已冻结</span>':'<span style="color:var(--green)">正常</span>')+'</td>'+
+        '<td style="font-size:12px;color:var(--fg-3)">'+(u.lastSeen||u.createdAt||'')+'</td>'+
+        '<td style="white-space:nowrap">'+
+          '<button class="btn btn-sm" data-act="coin" data-id="'+u.id+'" data-n="'+esc(u.name)+'">加减</button> '+
+          '<button class="btn btn-sm" data-act="log" data-id="'+u.id+'">流水</button> '+
+          '<button class="btn btn-sm" data-act="freeze" data-id="'+u.id+'" data-f="'+(u.frozen?1:0)+'">'+(u.frozen?'解冻':'冻结')+'</button>'+
+        '</td></tr>';
+    }
+    $('#usersBody').innerHTML=h||'<tr><td colspan="7" class="empty">暂无用户</td></tr>';
+    bindUserBtns();
+  });
+}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];});}
+
+function bindUserBtns(){
+  $$('#usersBody button').forEach(function(b){
+    b.onclick=function(){
+      var a=b.dataset.act,id=b.dataset.id;
+      if(a==='freeze'){
+        call('/admin/api/user/freeze',{userId:Number(id),frozen:b.dataset.f==='1'}).then(function(){toast('已更新','ok');loadUsers();});
+      }else if(a==='coin'){
+        var v=prompt('给「'+b.dataset.n+'」增减 QUN，正数增加，负数扣除');
+        if(v===null)return;
+        call('/admin/api/user/coins',{userId:Number(id),amount:Number(v)}).then(function(r){
+          toast(r.ok?('新余额 '+f2(r.balance)):(r.error||'失败'),r.ok?'ok':'err');loadUsers();});
+      }else if(a==='log'){
+        call('/admin/api/user/logs?userId='+id,null,'GET').then(function(r){
+          var h='<div class="tw" style="max-height:52vh;overflow:auto"><table><thead><tr><th>时间</th><th>变动</th><th>余额</th><th>原因</th></tr></thead><tbody>';
+          for(var i=0;i<r.list.length;i++){var c=r.list[i];
+            h+='<tr><td style="font-size:12px">'+c.created_at+'</td>'+
+               '<td class="mono" style="color:'+(c.delta>0?'var(--green)':'var(--red)')+'">'+(c.delta>0?'+':'')+f2(c.delta)+'</td>'+
+               '<td class="mono">'+f2(c.balance)+'</td><td>'+c.reason+'</td></tr>';}
+          h+='</tbody></table></div>';
+          showSheet('QUN 流水',h);
+        });
+      }
+    };
+  });
+}
+$('#btnSearch').onclick=loadUsers;
+$('#uq').addEventListener('keydown',function(e){if(e.key==='Enter')loadUsers();});
+
+/* ---- 发放 ---- */
+$('#btnGrant').onclick=function(){
+  var ids=$('#gIds').value.trim(),amt=Number($('#gAmt').value);
+  if(!ids||!amt){toast('请填写 ID 和数量','err');return;}
+  call('/admin/api/grant',{discordId:ids,amount:amt,note:$('#gNote').value}).then(function(r){
+    var h='<div style="margin-top:10px">';
+    for(var i=0;i<r.results.length;i++){var u=r.results[i];
+      h+='<div style="padding:6px 0;font-size:13px">'+(u.ok?
+        '<span style="color:var(--green)">✓ '+(u.name||u.id)+' → '+f2(u.balance)+'</span>':
+        '<span style="color:var(--red)">✗ '+(u.id)+(u.error?': '+u.error:'')+'</span>')+'</div>';}
+    h+='</div>';
+    $('#grantOut').innerHTML=h;toast('发放完成','ok');loadStats();
+  });
+};
+$('#btnGrantAll').onclick=function(){
+  var amt=Number($('#gAll').value);
+  if(!amt){toast('请输入数量','err');return;}
+  if(!confirm('确定给所有用户每人发放 '+amt+' QUN？'))return;
+  call('/admin/api/users',null,'GET').then(function(r){
+    var n=0,done=0;
+    for(var i=0;i<r.list.length;i++){(function(u){
+      call('/admin/api/grant',{userIds:[u.id],amount:amt,reason:'mass_grant'}).then(function(){
+        done++;if(done===n)toast('群发完成，共 '+n+' 人','ok');
+      });
+    })(r.list[i]);n++;}
+    if(!n)toast('没有用户','err');
+  });
+};
+
+/* ---- 下注 / 奖期 ---- */
+function loadBets(){
+  call('/admin/api/bets',null,'GET').then(function(r){
+    var h='';
+    for(var i=0;i<r.list.length;i++){var b=r.list[i];
+      var st=b.status===1?'<span style="color:var(--green)">逃跑</span>':
+               b.status===2?'<span style="color:var(--red)">爆掉</span>':'<span style="color:var(--fg-3)">进行中</span>';
+      h+='<tr><td class="mono">'+b.id+'</td><td class="mono">#'+b.round+'</td>'+
+        '<td>'+esc(b.user)+'</td><td class="mono">'+f2(b.amount)+'</td><td>'+st+'</td>'+
+        '<td class="mono">'+(b.rate?Number(b.rate).toFixed(2)+'x':'—')+'</td>'+
+        '<td class="mono" style="color:'+(b.profit>=0?'var(--green)':'var(--red)')+'">'+(b.profit>=0?'+':'')+f2(b.profit)+'</td>'+
+        '<td style="font-size:12px;color:var(--fg-3)">'+b.at+'</td></tr>';}
+    $('#betsBody').innerHTML=h||'<tr><td colspan="8" class="empty">暂无下注</td></tr>';
+  });
+}
+function loadRounds(){
+  call('/admin/api/rounds',null,'GET').then(function(r){
+    var h='';
+    for(var i=0;i<r.list.length;i++){var x=r.list[i];
+      var st=x.status===3?'已结算':x.status===2?'飞行中':x.status===1?'下注中':'等待';
+      h+='<tr><td class="mono">#'+x.id+'</td>'+
+        '<td class="mono"><b>'+Number(x.rate).toFixed(2)+'x</b></td>'+
+        '<td class="mono">'+x.bets+'</td><td class="mono">'+f2(x.pot)+'</td>'+
+        '<td>'+st+'</td><td style="font-size:12px;color:var(--fg-3)">'+(x.settled_at||x.created_at)+'</td></tr>';}
+    $('#roundsBody').innerHTML=h||'<tr><td colspan="6" class="empty">暂无开奖</td></tr>';
+  });
+}
+
+/* ---- 机器人 ---- */
+function loadRobots(){
+  call('/admin/api/robots',null,'GET').then(function(r){
+    var h='';
+    for(var i=0;i<r.list.length;i++){var b=r.list[i];
+      h+='<tr><td class="mono">'+b.id+'</td><td><b>'+esc(b.name)+'</b></td>'+
+        '<td>'+(b.active?'<span style="color:var(--green)">启用</span>':'<span style="color:var(--fg-3)">停用</span>')+'</td>'+
+        '<td><button class="btn btn-sm" data-id="'+b.id+'" data-a="'+b.active+'">'+ (b.active?'停用':'启用')+'</button> '+
+        '<button class="btn btn-sm" data-id="'+b.id+'" data-del="1">删除</button></td></tr>';}
+    $('#robotsBody').innerHTML=h||'<tr><td colspan="4" class="empty">暂无机器人</td></tr>';
+    $$('#robotsBody button').forEach(function(x){
+      x.onclick=function(){
+        var payload={action:x.dataset.del?'delete':'toggle',id:Number(x.dataset.id)};
+        if(!x.dataset.del)payload.active=x.dataset.a==='1';
+        call('/admin/api/robots',payload).then(function(){toast('已更新','ok');loadRobots();});
+      };
+    });
+  });
+}
+$('#btnAddRobot').onclick=function(){
+  var n=$('#rName').value.trim();
+  if(!n){toast('请输入昵称','err');return;}
+  call('/admin/api/robots',{action:'add',name:n}).then(function(){toast('已添加','ok');$('#rName').value='';loadRobots();});
+};
+
+/* ---- 设置：赔率 / 活动 / 站点 ---- */
+var EVENTS = [];   // 当前活动配置（内存副本，保存时写回 events_json）
+
+function loadSettings(){
+  call('/admin/api/settings',null,'GET').then(function(r){
+    var s=r.settings||{};
+    // 站点
+    $('#s_name').value=s.site_name||'';
+    $('#s_signup').value=s.signup_bonus||500;
+    $('#s_announce').value=s.announce||'';
+    // 赔率
+    $('#s_mode').value=s.odds_mode||'4';
+    $('#s_oddsval').value=s.odds_value||0;
+    $('#s_min').value=s.min_rate||1.10;
+    $('#s_max').value=s.max_rate||1000;
+    $('#s_bmin').value=s.band_min||1.10;
+    $('#s_bmax').value=s.band_max||3.00;
+    $('#s_baserand').value=s.base_random||0.90;
+    $('#s_rake').value=s.rake_percent||0.03;
+    $('#s_pool').value=s.pool_balance||0;
+    $('#s_rmin').value=s.robot_bet_min||10;
+    $('#s_rmax').value=s.robot_bet_max||200;
+    // 活动
+    try{ EVENTS=JSON.parse(s.events_json||'[]'); }catch(_){ EVENTS=[]; }
+    if(!Array.isArray(EVENTS))EVENTS=[];
+    renderEvents();
+  });
+}
+$('#btnSaveSet').onclick=function(){
+  call('/admin/api/settings',{
+    site_name:$('#s_name').value, signup_bonus:$('#s_signup').value, announce:$('#s_announce').value
+  }).then(function(){toast('站点设置已保存','ok');loadStats();});
+};
+$('#btnSaveOdds').onclick=function(){
+  call('/admin/api/settings',{
+    odds_mode:$('#s_mode').value, odds_value:$('#s_oddsval').value,
+    min_rate:$('#s_min').value, max_rate:$('#s_max').value,
+    band_min:$('#s_bmin').value, band_max:$('#s_bmax').value,
+    base_random:$('#s_baserand').value, rake_percent:$('#s_rake').value,
+    pool_balance:$('#s_pool').value,
+    robot_bet_min:$('#s_rmin').value, robot_bet_max:$('#s_rmax').value
+  }).then(function(r){
+    if(r.error)toast(r.error,'err'); else toast('赔率设置已保存，下一局生效','ok');
+  });
+};
+
+function renderEvents(){
+  var b=$('#evBody');
+  if(!b)return;
+  if(!EVENTS.length){ b.innerHTML='<tr><td colspan="8" style="text-align:center;color:var(--fg-3);padding:14px">暂无活动</td></tr>'; return; }
+  b.innerHTML=EVENTS.map(function(e,i){
+    var en=e.enabled!==false;
+    return '<tr>'+
+      '<td><input type="checkbox" data-i="'+i+'" data-k="enabled" '+(en?'checked':'')+'></td>'+
+      '<td><input class="inp" style="min-width:110px" data-i="'+i+'" data-k="name" value="'+String(e.name||'').replace(/"/g,'&quot;')+'"></td>'+
+      '<td><input class="inp" style="width:74px" data-i="'+i+'" data-k="from" value="'+(e.from||'')+'"></td>'+
+      '<td><input class="inp" style="width:74px" data-i="'+i+'" data-k="to" value="'+(e.to||'')+'"></td>'+
+      '<td><input class="inp" style="width:64px" type="number" step="0.1" data-i="'+i+'" data-k="min" value="'+(e.min||1.1)+'"></td>'+
+      '<td><input class="inp" style="width:64px" type="number" step="0.1" data-i="'+i+'" data-k="max" value="'+(e.max||10)+'"></td>'+
+      '<td><input class="inp" style="width:56px" type="number" step="0.1" min="0" max="1" data-i="'+i+'" data-k="weight" value="'+(e.weight!=null?e.weight:0.8)+'"></td>'+
+      '<td><button class="btn btn-sm" data-del="'+i+'">删</button></td>'+
+    '</tr>';
+  }).join('');
+  // 绑定
+  b.querySelectorAll('input').forEach(function(inp){
+    inp.onchange=function(){
+      var i=+inp.dataset.i,k=inp.dataset.k;
+      if(k==='enabled') EVENTS[i].enabled=inp.checked;
+      else if(k==='min'||k==='max'||k==='weight') EVENTS[i][k]=parseFloat(inp.value)||0;
+      else EVENTS[i][k]=inp.value;
+    };
+  });
+  b.querySelectorAll('button[data-del]').forEach(function(btn){
+    btn.onclick=function(){ EVENTS.splice(+btn.dataset.del,1); renderEvents(); };
+  });
+}
+$('#btnAddEv').onclick=function(){
+  EVENTS.push({name:'限时活动',from:'19:00',to:'22:00',min:2,max:30,weight:0.8,enabled:true});
+  renderEvents();
+};
+$('#btnSaveEv').onclick=function(){
+  call('/admin/api/settings',{events_json:JSON.stringify(EVENTS)}).then(function(r){
+    if(r.error)toast(r.error,'err'); else toast('活动已保存，下一局生效','ok');
+  });
+};
+
+/* ---- 简易弹层 ---- */
+function showSheet(t,h){
+  var d=document.createElement('div');
+  d.style.cssText='position:fixed;inset:0;z-index:999;background:rgba(4,6,12,.75);display:grid;place-items:center;padding:20px;backdrop-filter:blur(6px)';
+  d.innerHTML='<div style="width:100%;max-width:640px;max-height:82vh;overflow:auto;background:var(--bg-1);border:1px solid var(--stroke);border-radius:20px;padding:20px">'+
+    '<h3 style="font-size:17px;font-weight:750;margin-bottom:14px">'+t+'</h3>'+h+
+    '<button class="btn btn-block" style="margin-top:14px" onclick="this.closest(\'div[style*=fixed]\').remove()">关闭</button></div>';
+  d.onclick=function(e){if(e.target===d)d.remove();};
+  document.body.appendChild(d);
+}
+
+/* ---- 启动 ---- */
+call('/admin/api/me',null,'GET').then(function(r){
+  if(r.id){$('#login').hidden=true;$('#main').hidden=false;boot();}
+  else $('#login').hidden=false;
+});
+</script>
+</body>
+</html>
