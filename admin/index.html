@@ -316,6 +316,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f">
           <label>赔率模式</label>
           <select class="inp" id="s_mode">
+            <option value="7">Jev 做庄（AI 选倍率段）</option>
             <option value="6">百分比分布表（推荐）</option>
             <option value="5">加权分布（旧版，参数多）</option>
             <option value="4">区间随机（旧版，均匀分布）</option>
@@ -326,6 +327,107 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         </div>
         <div class="f"><label>最低爆点 min_rate（安全下限）</label><input class="inp" id="s_min" type="number" step="0.01"></div>
         <div class="f"><label>最高爆点 max_rate（安全上限）</label><input class="inp" id="s_max" type="number" step="0.01"></div>
+      </div>
+
+      <!--
+        模式 7：Jev 做庄（TypeSafe System One / jev-1.13）。
+
+        【它做什么】起飞时刻把在场玩家的阈值发给 Jev，它选一个倍率段
+        （瞬爆/低段/中段/高段/爆段），段内具体倍率由代码随机取。
+        爆点仍然只有一个、全场共享同一条曲线 —— 与前六个模式完全一致，
+        不做任何按人差异化的赔付。
+
+        【分段边界是代码算的，不是 Jev 算的】
+        边界贴着在场玩家阈值的分位数切，所以「低段 = 大约赢一半人」
+        这个语义对任何房间都成立。后台那张百分比表在 mode 7 下不参与选段。
+
+        【三种必须让管理员看见的状态】
+        1) 调用来源：jev(真实调用) / cache(复用上次分布) / fallback(Jev 不可用)
+        2) token 与费用：按 $42/Mtok input、output 免费折算
+        3) 人格说明：写清每个段会让谁赢，避免「配了但不知道效果」
+      -->
+      <div class="panel-sub" id="w7Panel">
+        <b>Jev 做庄</b>
+        <span class="hint">起飞时由 AI 根据在场玩家的心理倍率选一个倍率段，段内具体倍率随机。
+        爆点全场共享同一条曲线，不按人差别赔付。<b>没人下注的一局不会调用 API</b>；
+        连续多局若房间构成相近，复用上一次的判断结果以节省费用。</span>
+      </div>
+      <div id="w7Body">
+        <div class="row">
+          <div class="f">
+            <label>启用 Jev</label>
+            <select class="inp" id="j_enabled">
+              <option value="0">关闭（模式 7 退回普通算法）</option>
+              <option value="1">开启</option>
+            </select>
+          </div>
+          <div class="f">
+            <label>人格</label>
+            <select class="inp" id="j_persona">
+              <option value="standard">标准人格 · 有输有赢</option>
+              <option value="bodhisattva">菩萨人格 · 多数人带钱走</option>
+            </select>
+          </div>
+          <div class="f">
+            <label>调用采样率（%）</label>
+            <input class="inp" id="j_sample" type="number" min="0" max="100" step="5">
+          </div>
+        </div>
+        <div class="row">
+          <div class="f">
+            <label>分布复用窗口（局）</label>
+            <input class="inp" id="j_cache" type="number" min="1" max="50" step="1">
+          </div>
+          <div class="f">
+            <label>单次超时（ms）</label>
+            <input class="inp" id="j_timeout" type="number" min="200" max="10000" step="100">
+          </div>
+          <div class="f">
+            <label>API Key（留空则用环境变量 TYPESAFE_API_KEY）</label>
+            <input class="inp" id="j_key" type="password" placeholder="已配置则不在此回显">
+          </div>
+        </div>
+
+        <div class="panel-sub"><b>活动段</b>
+          <span class="hint">活动段内自动切到<b>菩萨人格</b>，并强制执行倍率上限与秒爆比例。</span>
+        </div>
+        <div class="row">
+          <div class="f">
+            <label>活动段生效局数（0 = 不启用）</label>
+            <input class="inp" id="j_act_rounds" type="number" min="0" step="10">
+          </div>
+          <div class="f">
+            <label>活动段最高倍率（0 = 不限制）</label>
+            <input class="inp" id="j_act_max" type="number" min="0" step="1">
+          </div>
+          <div class="f">
+            <label>秒爆百分比（0-100）</label>
+            <input class="inp" id="j_act_inst" type="number" min="0" max="100" step="1">
+          </div>
+        </div>
+        <div class="row">
+          <div class="f">
+            <label></label>
+            <button class="btn" id="j_btn_act">一键开启活动段</button>
+          </div>
+          <div class="f">
+            <label>一键结束</label>
+            <button class="btn" id="j_btn_actoff">结束活动段</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="f">
+            <label></label>
+            <button class="btn" id="j_btn_save">保存 Jev 设置</button>
+          </div>
+          <div class="f">
+            <label></label>
+            <button class="btn" id="j_btn_load">刷新状态</button>
+          </div>
+        </div>
+        <div id="j_status" class="hint" style="margin-top:8px"></div>
+        <div id="j_dist" style="margin-top:8px"></div>
       </div>
 
       <!--
@@ -1059,12 +1161,26 @@ $('#btnDelRow').onclick = function(){
 };
 
 function w6Preview(){
-  var on = $('#s_mode').value === '6';
+  var mode = $('#s_mode').value;
+  var on = mode === '6';
   document.getElementById('w6Panel').style.display = on ? '' : 'none';
   // 表格 + 按钮 + 合计 + 预览 统一由 w6Body 控制显隐，
   // 避免 JS 分别改四个元素的 display 时出现遗漏（之前就漏过按钮）。
   var body = document.getElementById('w6Body');
   if (body) body.style.display = on ? '' : 'none';
+
+  /**
+   * 【mode 7 / Jev 面板显隐】跟着同一个 syncW5 走。
+   * ⚠️ 必须显隐 w7Panel 和 w7Body【两个】，只改一个会出现
+   *    「标题在但输入框没了」或反过来 —— 这是 w6 当年同一个坑。
+   * 首次进入 mode 7 时才拉一次配置，避免每次切模式都打后台接口。
+   */
+  var on7 = mode === '7';
+  document.getElementById('w7Panel').style.display = on7 ? '' : 'none';
+  var b7 = document.getElementById('w7Body');
+  if (b7) b7.style.display = on7 ? '' : 'none';
+  if (on7 && !w7Loaded) { w7Loaded = true; w7Load(); }
+
   void 0;
   /**
    * ⚠️ 这里【不能】在页面加载时就把按钮藏掉。
@@ -1196,7 +1312,133 @@ $('#s_mode').onchange = function(){
   }
   call('/admin/api/settings', body).then(function(r){
     if (r && r.error) { toast('保存失败：' + r.error, 'err'); return; }
-    toast('已切换到' + (mode === '6' ? '百分比分布表' : '模式 ' + mode) + '，下一局生效', 'ok');
+    toast('已切换到' + (mode === '6' ? '百分比分布表' : mode === '7' ? 'Jev 做庄' : '模式 ' + mode) + '，下一局生效', 'ok');
+  });
+};
+
+/**
+ * 【2026-09-30】模式 7 / Jev 面板
+ *
+ * ⚠️ 三个必须守住的点，都是这个项目交过学费的：
+ *
+ * 1) 每个 setting 都要有输入框，且加载时回显。填了不显示 = 配了像没配。
+ *    API key 例外：只在「是否已配置」处提示，绝不回填明文到 DOM ——
+ *    后台页面的 input 值会被 devtools 和任何前端脚本直接读到。
+ *
+ * 2) 保存后必须回显【真实分布】，不能只弹「已保存」。
+ *    项目铁律：静默生效的缺陷正是用户报「配了没生效」的根因。
+ *
+ * 3) 预览不烧钱：/admin/api/jev/preview 是纯代码模拟，绝不调用 Jev。
+ *    如果预览走真实 API，管理员点一次就花一次钱 —— 这是不能接受的默认行为。
+ */
+/** Jev 面板是否已拉过配置（只拉一次，避免每次切模式都打接口） */
+var w7Loaded = false;
+
+function w7Load() {
+  return call('/admin/api/jev').then(function(r){
+    if (!r || r.error) return;
+    var c = r.config || {};
+    $('#j_enabled').value  = c.enabled ? '1' : '0';
+    $('#j_persona').value  = c.persona || 'standard';
+    $('#j_sample').value   = c.sampleRate;
+    $('#j_cache').value    = c.cacheRounds;
+    $('#j_timeout').value  = c.timeoutMs;
+    $('#j_act_rounds').value = c.actRounds;
+    $('#j_act_max').value    = c.actMax;
+    $('#j_act_inst').value   = c.actInstant;
+    // key 不回填，只提示来源
+    $('#j_key').placeholder = (c.hasKeyInSettings || c.hasEnvKey)
+      ? '已配置（保存时留空表示不修改）' : '未配置，留空则用环境变量 TYPESAFE_API_KEY';
+    $('#j_enabled').disabled = !(c.hasKeyInSettings || c.hasEnvKey);
+    if (!(c.hasKeyInSettings || c.hasEnvKey)) {
+      $('#j_enabled').value = '0';
+    }
+    w7Status(r.status, (r.personas||{})[c.persona]);
+  }).catch(function(){ /* 面板加载失败不该阻塞整个后台 */ });
+}
+
+function w7Status(s, persona) {
+  if (!s) return;
+  var u = s.usage || {};
+  var src = { jev: '真实调用', cache: '复用上次分布', fallback: 'Jev 不可用，走本地算法' }[s.last && s.last.source] || '尚未开局';
+  var probs = (s.last && s.last.probs) || null;
+  var pTxt = '';
+  if (probs) {
+    pTxt = Object.keys(probs).map(function(k){
+      var name = {instant:'瞬爆',low:'低段',mid:'中段',high:'高段',top:'爆段'}[k] || k;
+      return name + ' ' + (probs[k]*100).toFixed(0) + '%';
+    }).join(' · ');
+  }
+  $('#j_status').innerHTML =
+    '<b>当前</b> ' + (s.enabled ? '已开启' : '未开启') +
+    ' · 人格 ' + (s.personaLabel || '-') +
+    ' · 上一次来源：' + src +
+    (s.last && s.last.confidence != null ? ' · confidence ' + s.last.confidence : '') +
+    '<br><b>用量</b> 调用 ' + (u.calls||0) + ' 次 · 失败 ' + (u.fails||0) +
+    ' · 复用 ' + (u.reused||0) + ' 局 · input ' + (u.inTok||0) + ' tok（' +
+    (u.perCallTokens||0) + '/次）· 累计 $' + (u.costUsd || 0).toFixed(4) +
+    (pTxt ? '<br><b>最近一次判断</b> ' + pTxt : '') +
+    (persona ? '<br><span class="hint">' + persona.desc + '</span>' : '');
+}
+
+function w7Body() {
+  return {
+    enabled:      $('#j_enabled').value === '1',
+    persona:      $('#j_persona').value,
+    sampleRate:   $('#j_sample').value,
+    cacheRounds:  $('#j_cache').value,
+    timeoutMs:    $('#j_timeout').value,
+    actRounds:    $('#j_act_rounds').value,
+    actMax:       $('#j_act_max').value,
+    actInstant:   $('#j_act_inst').value,
+    apiKey:       $('#j_key').value,
+    previewRounds: 400,
+  };
+}
+
+$('#j_btn_save').onclick = function(){
+  call('/admin/api/jev', w7Body()).then(function(r){
+    if (!r || r.error) { toast('保存失败：' + (r && r.error), 'err'); return; }
+    // 回显真实分布 —— 不能只说「已保存」
+    var p = r.preview || {};
+    var rows = (p.bands || []).map(function(b){
+      return '<tr><td>' + b.label + '</td><td>' + b.pct + '%</td></tr>';
+    }).join('');
+    $('#j_dist').innerHTML =
+      '<b>保存后实际分布</b>（' + (p.rounds||0) + ' 局模拟，平均 ' +
+      (p.avgWinShare!=null ? p.avgWinShare : '-') + '% 的人赢）' +
+      '<table class="tbl" style="margin-top:6px"><tr><th>倍率段</th><th>占比</th></tr>' + rows + '</table>' +
+      '<span class="hint">' + (p.note||'') + '</span>';
+    w7Status(r.status);
+    toast('已保存，下一局生效', 'ok');
+  }).catch(function(e){ toast('保存失败：' + e.message, 'err'); });
+};
+
+$('#j_btn_load').onclick = function(){
+  $('#j_dist').innerHTML = '';
+  w7Load();
+  toast('已刷新', 'ok');
+};
+
+$('#j_btn_act').onclick = function(){
+  call('/admin/api/jev/activity', {
+    enabled: true,
+    rounds:  $('#j_act_rounds').value,
+    maxRate: $('#j_act_max').value,
+    instantPct: $('#j_act_inst').value,
+  }).then(function(r){
+    if (!r || r.error) { toast('开启失败：' + (r && r.error), 'err'); return; }
+    var a = r.status.activity;
+    toast('活动段已开启：' + a.roundsLeft + ' 局 · 最高 ' + (a.maxRate||'不限') + 'x · 秒爆 ' + (a.instantPct||0) + '%', 'ok');
+    w7Status(r.status);
+  });
+};
+
+$('#j_btn_actoff').onclick = function(){
+  call('/admin/api/jev/activity', { enabled: false }).then(function(r){
+    if (!r || r.error) { toast('结束失败：' + (r && r.error), 'err'); return; }
+    toast('活动段已结束', 'ok');
+    w7Status(r.status);
   });
 };
 

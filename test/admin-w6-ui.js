@@ -105,8 +105,32 @@ const dom = new JSDOM(`<!DOCTYPE html><html><body>
   <div class="f"><button id="btnAddRow"></button></div>
   <div class="f"><button id="btnDelRow"></button></div>
   <button id="btnSaveOdds">保存赔率设置</button>
+  <!--
+    【2026-09-30】Jev 面板（mode 7）的元素。
+    这段 inline JS 现在也包含 $('#j_btn_save').onclick 等绑定，
+    mock DOM 里缺任何一个都会抛 "Cannot set properties of null"，
+    于是整个 admin-w6-ui 测试挂掉 —— 所以必须补全。
+  -->
+  <div class="panel-sub" id="w7Panel"></div>
+  <div id="w7Body">
+    <select id="j_enabled"><option value="0">0</option><option value="1">1</option></select>
+    <select id="j_persona"><option value="standard">standard</option><option value="bodhisattva">bodhisattva</option></select>
+    <input id="j_sample" value="100">
+    <input id="j_cache" value="4">
+    <input id="j_timeout" value="800">
+    <input id="j_key" type="password">
+    <input id="j_act_rounds" value="0">
+    <input id="j_act_max" value="0">
+    <input id="j_act_inst" value="0">
+    <button id="j_btn_save"></button>
+    <button id="j_btn_load"></button>
+    <button id="j_btn_act"></button>
+    <button id="j_btn_actoff"></button>
+    <div id="j_status"></div>
+    <div id="j_dist"></div>
+  </div>
   <select id="s_mode">
-    <option value="6">6</option><option value="5">5</option>
+    <option value="6">6</option><option value="5">5</option><option value="7">7</option>
   </select>
   ${['s_wlow','s_wmid','s_whigh','s_wtop','s_wboom','s_wboommax','s_wlomin','s_wlomax',
      's_wmidmin','s_wmidmax','s_whimin','s_whimax','s_wtopmin','s_wtopmax']

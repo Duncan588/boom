@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const activities = require('../activities');
 const { round2 } = require('../game-logic');
+const jev = require('../jev');
 const { json, readBody, parseCookies, setCookie, clearCookie } = require('../http-util');
 
 const COOKIE = 'bd_admin';
@@ -474,6 +475,94 @@ function register(router) {
     for (const [k, v] of Object.entries(b || {})) cur[k] = v;
     db.setSetting('activities_json', JSON.stringify(cur));
     json(res, 200, { ok: true, params: cur });
+  });
+
+  /* ---------- Jev 做庄（赔率模式 7）---------- */
+
+  /**
+   * 读取全部 Jev 配置 + 运行时状态。
+   * ⚠️ API key 只回传「是否已配置」和一个掩码，绝不回传明文 ——
+   *    这个端点虽然要 admin，但它会被写进浏览器 devtools 的历史里。
+   */
+  router.get('/admin/api/jev', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const s = db.allSettings();
+    const key = String(s.jev_api_key || '');
+    json(res, 200, {
+      config: {
+        enabled: String(s.jev_enabled ?? '0') === '1',
+        persona: s.jev_persona === 'bodhisattva' ? 'bodhisattva' : 'standard',
+        sampleRate: Number(s.jev_sample_rate ?? 100),
+        cacheRounds: Number(s.jev_cache_rounds ?? 4),
+        timeoutMs: Number(s.jev_timeout_ms ?? 800),
+        actEnabled: String(s.jev_act_enabled ?? '0') === '1',
+        actRounds: Number(s.jev_act_rounds ?? 0),
+        actMax: Number(s.jev_act_max ?? 0),
+        actInstant: Number(s.jev_act_instant ?? 0),
+        hasKeyInSettings: !!key,
+        hasEnvKey: !!process.env.TYPESAFE_API_KEY,
+      },
+      personas: require('../jev-personas').PERSONAS,
+      status: jev.status(),
+    });
+  });
+
+  router.post('/admin/api/jev', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const b = await readBody(req);
+    const num = (v, d, lo, hi) => {
+      if (v === undefined || v === null || v === '') return d;
+      const n = Number(v);
+      return isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d;
+    };
+    const put = (k, v) => db.setSetting(k, String(v));
+
+    put('jev_enabled', b.enabled ? '1' : '0');
+    put('jev_persona', b.persona === 'bodhisattva' ? 'bodhisattva' : 'standard');
+    put('jev_sample_rate', num(b.sampleRate, 100, 0, 100));
+    put('jev_cache_rounds', num(b.cacheRounds, 4, 1, 50));
+    put('jev_timeout_ms', num(b.timeoutMs, 800, 200, 10000));
+    // key 传空字符串 = 保持原值不变（前端不回显明文，只能「改」不能「看」）
+    if (typeof b.apiKey === 'string' && b.apiKey.trim()) put('jev_api_key', b.apiKey.trim());
+
+    put('jev_act_enabled', b.actEnabled ? '1' : '0');
+    put('jev_act_rounds', num(b.actRounds, 0, 0, 100000));
+    put('jev_act_max', num(b.actMax, 0, 0, 100000));
+    put('jev_act_instant', num(b.actInstant, 0, 0, 100));
+
+    // 立刻生效：下一局就按新配置走，不需重启
+    jev.configure(db.allSettings());
+
+    // 保存后回显真实分布，而不是「已保存」——
+    // 项目铁律：静默生效的缺陷正是用户报「配了没生效」的原因。
+    json(res, 200, {
+      ok: true,
+      preview: jev.preview(Number(b.previewRounds) || 300),
+      status: jev.status(),
+    });
+  });
+
+  /** 一键开启活动段：切菩萨人格 + 限倍率 + 定秒爆比例 */
+  router.post('/admin/api/jev/activity', async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const b = await readBody(req);
+    const n = (v, d, lo, hi) => {
+      const x = Number(v);
+      return isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d;
+    };
+    db.setSetting('jev_act_enabled', b.enabled === false ? '0' : '1');
+    db.setSetting('jev_act_rounds', String(n(b.rounds, 100, 0, 100000)));
+    db.setSetting('jev_act_max', String(n(b.maxRate, 25, 0, 100000)));
+    db.setSetting('jev_act_instant', String(n(b.instantPct, 15, 0, 100)));
+    jev.configure(db.allSettings());
+    json(res, 200, { ok: true, status: jev.status() });
+  });
+
+  /** 纯代码分布预览。⚠️ 绝不调用 Jev —— 管理员点一次预览不该烧一次钱。 */
+  router.get('/admin/api/jev/preview', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    jev.configure(db.allSettings());
+    json(res, 200, jev.preview(Number(req.query?.rounds) || 300));
   });
 }
 

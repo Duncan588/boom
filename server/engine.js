@@ -12,6 +12,22 @@
 const { CFG, FLIGHT_SCALE, flightMs, rateAt, payout, decideRate, activeEvent, round2, sleep } = require('./game-logic');
 const { runHooks } = require('./activities');
 const db = require('./db');
+const jev = require('./jev');
+
+/**
+ * 把一个人的心理倍率归到个性档（给降级分布加权用）。
+ * 阈值参考模拟器里那六种个性：稳健 2-3x、贪财 1.6-2.2x、
+ * 梭哈 1.5-5x、慢热 2.5-6x、捡漏 4-9x、赌高倍 12x 以上。
+ * 边界取相邻档的重叠处，避免一个 3.0x 的人被硬塞进某一档。
+ */
+function classify(thr) {
+  if (thr < 1.9) return 'greedy';
+  if (thr < 3.2) return 'steady';
+  if (thr < 5.0) return 'all_in';
+  if (thr < 8.0) return 'late_bomber';
+  if (thr < 12.0) return 'slow_hand';
+  return 'high_chaser';
+}
 
 class Engine {
   constructor(broadcast) {
@@ -22,6 +38,7 @@ class Engine {
     this.jackpot = 0;
     this.settings = {};
     this.pool = 0;        // 后台资金池（原 moneypool）
+    this.lastBoom = null; // 上一局实际爆点 —— Jev 的 state 用它做「已结算的历史」
   }
 
   start() {
@@ -41,7 +58,55 @@ class Engine {
   refreshSettings() {
     this.settings = db.allSettings();
     this.pool = Number(this.settings.pool_balance) || 0;
+    // Jev 的配置同步过去：后台改人格/采样率/活动段后下一局就生效，不需重启
+    try { jev.configure(this.settings); } catch (e) { console.warn('[jev] configure 失败:', e.message); }
     return this.settings;
+  }
+
+  /**
+   * 【mode 7】取本局在场的真人玩家档案，供 Jev 判断该爆在哪一段。
+   *
+   * 只统计真人（bets JOIN users），机器人不在 bets 表里所以天然排除。
+   *
+   * thr = 这个人的心理倍率：从他最近 20 次逃跑的实际倍率取中位数。
+   * 没有逃跑历史 → 落回下注习惯推断的默认档（见 jev-archetype）。
+   * 用中位数而不是均值：一次手滑点了个 1.02x 不该把他定义成稳健型。
+   */
+  seatedProfiles(roundId) {
+    let rows = [];
+    try {
+      rows = db.get().prepare(
+        `SELECT b.user_id, u.coins FROM bets b
+         JOIN users u ON u.id = b.user_id
+         WHERE b.round_id = ? AND b.status = 0`
+      ).all(roundId);
+    } catch (_) { return []; }
+    if (!rows.length) return [];
+
+    const out = [];
+    for (const r of rows) {
+      const hist = db.get().prepare(
+        `SELECT escape_rate FROM bets
+         WHERE user_id = ? AND status = 1 AND escape_rate > 1
+         ORDER BY id DESC LIMIT 20`
+      ).all(r.user_id).map((x) => Number(x.escape_rate)).filter((v) => isFinite(v) && v > 1);
+
+      let thr = null;
+      if (hist.length >= 3) {
+        const s = hist.sort((a, b) => a - b);
+        thr = s[Math.floor(s.length / 2)];
+      }
+      // 落回默认档：按他这一局的下注额相对余额判断是不是梭哈
+      const amt = Number(r.coins) || 0;
+      if (thr == null) thr = 2.5;
+      out.push({
+        ar: classify(thr),
+        thr: Math.max(1.05, Math.min(thr, 200)),
+        lossStreak: 0,
+        coins: Math.round(amt),
+      });
+    }
+    return out;
   }
 
   stop() {
@@ -64,6 +129,15 @@ class Engine {
   async playRound() {
     this.refreshSettings();
     const cfg = this.settings;
+
+    /**
+     * 【mode 7 / Jev 做庄】本局是否走 Jev 选段。
+     * ⚠️ 三个条件缺一不可：后台选了模式 7、jev_enabled=1、API key 存在。
+     *    任何一条不满足就整局走原来的表驱动 —— Jev 是可选增强，不是依赖。
+     */
+    const mode7 = String(cfg.odds_mode) === '7'
+      && String(cfg.jev_enabled ?? '0') === '1'
+      && !!(cfg.jev_api_key || process.env.TYPESAFE_API_KEY);
 
     // ---- 0a. 小活动插件钩子（可在开局前改倍率上限/抽成/标签）----
     // 框架在 server/activities/，加活动只加文件，不改主循环。
@@ -161,11 +235,37 @@ class Engine {
     db.get().prepare('UPDATE rounds SET status = 2 WHERE id = ?').run(roundId);
     this.current.status = 'flying';
 
-    // ---- 4. 决定爆点（资金池反推 / 限时活动）----
+    /**
+     * 【mode 7 / Jev 做庄】取本局在场【真人】玩家档案。
+     *
+     * ⚠️ 只统计真人下注，机器人不计入 —— 否则「没人也有一屋子机器人」，
+     *    Jev 会为一个空房间持续付费，那是纯浪费。
+     */
+    const seated = mode7 ? this.seatedProfiles(roundId) : null;
+
+    // ---- 4. 决定爆点（资金池反推 / 限时活动 / Jev 选段）----
     const pot = db.get().prepare(
       `SELECT COALESCE(SUM(amount),0) s FROM bets WHERE round_id = ?`
     ).get(roundId).s;
-    const dec = decideRate(cfg, pot, this.pool, ev);
+    const dec = decideRate(cfg, pot, this.pool, ev, seated && seated.length ? { seated, lastBoom: this.lastBoom } : null);
+
+    /**
+     * 【预热下一局分布】fire-and-forget，绝不 await。
+     * 起飞这一刻玩家正盯着火箭等结果，任何网络等待都是可见的卡顿。
+     * jev.prefetch 内部永不 reject 且带 abort 超时 —— 一个可选的外部
+     * 副作用不能有能力把游戏带走（这正是活动 teardown 踩过的坑）。
+     */
+    if (mode7 && seated && seated.length) {
+      try {
+        jev.tickRound(roundId + 1);
+        jev.prefetch(seated, dec.rate, null).catch(() => {});
+      } catch (_) { /* Jev 是可选增强，失败不影响本局 */ }
+    }
+    /**
+     * 【活动段扣减】一个局扣一次，必须在起飞这一处 —— pickBand 和 prefetch 都只是查询。
+     * 早先在 activity() 里扣，导致一局扣两次，「设 2 局」只生效 1 局。
+     */
+    if (mode7) jev.consumeActivity();
     const rate = dec.rate;
     // 飞行时长上限：原版靠资金池约束不会出现极端值，但我们允许后台把 max_rate 调到
     // 1000，flightMs(1000) = 700 秒，会把整个引擎 sleep 住（单进程引擎，12 分钟卡死）。
@@ -181,9 +281,23 @@ class Engine {
     }
     db.get().prepare('UPDATE rounds SET rate = ? WHERE id = ?').run(rate, roundId);
     this.current.rate = rate;
+    this.lastBoom = rate;                       // Jev 下一局的 state 依据
     this.current.flightStart = Date.now();      // 逃跑时按真实已飞时间算倍率
     this.current.flightTotalMs = ms;            // 中途加入的玩家据此算剩余时间
     this.broadcast({ type: 'takeoff', gid: roundId, flightMs: ms });
+
+    /**
+     * 【Jev 决策日志】只在真正走了 Jev 分支时打。
+     *
+     * ⚠️ 早先版本用 `if (mode7)` 打日志，于是会出现
+     *   「[jev] 第 5426 局 段=undefined 来源=undefined」
+     * 这样的行：mode7 为真（配置已开）但本局没有真人下注，
+     * decideRate 走的是 7-fallback 早退分支，返回值里根本没有 jev 字段。
+     * 这种日志会让人误以为 Jev 在工作，实际是空记录。
+     */
+    if (dec.jev) {
+      console.log(`[jev] 第 ${roundId} 局 爆点 ${rate}x  段=${dec.jev.band}  来源=${dec.jev.source}  conf=${dec.jev.confidence ?? '-'}`);
+    }
 
     await sleep(ms);
     if (!this.running || this.current.id !== roundId) return;

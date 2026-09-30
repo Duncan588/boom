@@ -118,8 +118,10 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * @param {number} pot  本局总投注
  * @param {number} pool 后台资金池
  * @param {object|null} event 命中的限时活动（无则 null）
+ * @param {object|null} ctx  【mode 7 新增】房间上下文 { seated:[{ar,thr,lossStreak}], lastBoom, act }
+ *   前六个模式不使用它，保持原调用方式不变（ctx 省略即行为不变）。
  */
-function decideRate(cfg, pot, pool, event) {
+function decideRate(cfg, pot, pool, event, ctx) {
   const min = Number(cfg.min_rate) || CFG.MIN_RATE;
   const max = Number(cfg.max_rate) || CFG.MAX_RATE;
   const mode = String(cfg.odds_mode ?? '4');
@@ -197,6 +199,28 @@ function decideRate(cfg, pot, pool, event) {
      * 下界 1.50 → 2500ms
      */
     rate = t.v;
+  } else if (mode === '7') {
+    /**
+     * 【2026-09-30 新增】Jev 做庄模式。
+     *
+     * 爆点仍然【只有一个】，全场共享同一条 rateAt 曲线 —— 与前六个模式完全一致，
+     * 不引入任何按人差异化的东西。Jev 只决定这一局落在哪个倍率段，
+     * 段内取多少倍率由 decideRateJev 里的 Math.random() 完成。
+     *
+     * 分段边界贴着在场玩家的逃跑阈值分位数自适应（见 server/jev-bands.js），
+     * 所以后台那张百分比表在 mode 7 下不参与选段，只作为降级基线与后台预览对照。
+     *
+     * ctx 形如 { seated:[{ar,thr,lossStreak}], lastBoom, act }，由 engine 传入。
+     * 缺 ctx 或无人 → 直接退回 mode 6 的表驱动，绝不在空房间调用外部 API。
+     */
+    const seated = ctx && Array.isArray(ctx.seated) ? ctx.seated.filter((p) => p && isFinite(p.thr)) : [];
+    if (!seated.length) {
+      const t = tableRate(cfg);
+      return { rate: t ? round2(t.v) : clamp(min + Math.random() * 0.9), fast: false, mode: '7-fallback' };
+    }
+    const jev = require('./jev');
+    const pick = jev.pickBand(seated, ctx.lastBoom ?? null, ctx.act || null);
+    return { rate: pick.rate, fast: false, mode: '7-jev', jev: { band: pick.band, source: pick.source, confidence: pick.confidence } };
   }
 
   /**

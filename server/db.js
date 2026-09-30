@@ -433,6 +433,20 @@ const DEFAULT_SETTINGS = {
   // 展示
   max_flight_ms: '120000',  // 单局飞行物理上限（100x≈73.8s，所以要 >74s）
   jackpot: '0',
+  // ---- Jev 做庄（赔率模式 7）----
+  // ⚠️ 默认 jev_enabled='0'：不填 API key 时 mode 7 自动退回表驱动，
+  //    游戏照跑。开启需同时满足 odds_mode=7 + jev_enabled=1 + 有 key。
+  jev_enabled: '0',
+  jev_api_key: '',          // 留空则读环境变量 TYPESAFE_API_KEY
+  jev_persona: 'standard',  // standard=标准人格  bodhisattva=菩萨人格
+  jev_sample_rate: '100',   // 0-100，调用采样率；降到 20 即只五分之一的局问 Jev
+  jev_cache_rounds: '4',    // 分布复用窗口：每 N 局至少重问一次
+  jev_timeout_ms: '800',    // 单次调用超时，超时即降级，绝不阻塞起飞
+  // 活动段：一键切换到菩萨人格 + 限制倍率上限 + 指定秒爆比例
+  jev_act_enabled: '0',
+  jev_act_rounds: '0',      // 生效局数，0 = 不启用
+  jev_act_max: '0',         // 活动段最高倍率，0 = 不限制
+  jev_act_instant: '0',     // 活动段内秒爆百分比 0-100
 };
 
 function seedSettings() {
