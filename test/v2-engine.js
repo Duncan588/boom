@@ -100,7 +100,8 @@ console.log('\n--- Jev 建议倍率会被采纳但受边界钳制 ---');
 const d1 = E.decide({ seated: players, bounds, suggestion: 8.5 });
 t('Jev 给 8.5 → 采用', d1.rate === 8.5, String(d1.rate));
 t('来源标记为 jev', d1.source === 'jev');
-const d2 = E.decide({ seated: players, bounds, suggestion: 9999 });
+// ⚠️ 必须关掉瞬爆：否则这局可能掷出 boom（1.01x），测的就不是钳制逻辑了。
+const d2 = E.decide({ seated: players, bounds, suggestion: 9999, boom: { p: 0 } });
 t('Jev 给 9999 → 钳到 max 120', d2.rate === 120, String(d2.rate));
 const d3 = E.decide({ seated: players, bounds, suggestion: 0.01 });
 t('Jev 给 0.01 → 钳到 min 1.01', d3.rate === 1.01, String(d3.rate));
@@ -287,6 +288,75 @@ console.log('\n--- 瞬爆必须是【真随机】，不是节奏配额 ---');
   // 空房时不掷瞬爆骰（没人可爆）
   const dEmpty = E.decide({ seated: [], bounds: { min: 1.01, max: 120 }, boom: { p: 1.0 } });
   t('空房时不触发瞬爆（boom.p=1 也无效）', dEmpty.source === 'empty', dEmpty.source);
+}
+
+// ---------- 10. 高倍必须真的出得来 ----------
+console.log('\n--- 高倍局（用户：「为什么都是低倍率，高倍率呢」）---');
+{
+  const B = { min: 1, max: 125 };
+  const spec = E.buildSpectrum(players, B);
+  const topThr = Math.max(...players.map((p) => p.thr));
+  t(`谱延伸到 max_rate 125x（原本停在最高阈值 ${topThr}x）`,
+    spec[spec.length - 1].rate >= 120, String(spec[spec.length - 1].rate));
+
+  const has = (t) => spec.some((r) => r.rate >= t);
+  t('谱里有 20x / 50x / 80x / 100x 附近的点', [20, 50, 80, 100].every(has),
+    spec.map((r) => r.rate).join(','));
+  /**
+   * ⚠️ 语义澄清（我第一版测试也写反了）：
+   *   escapes = 这一局有多少人【跑掉了/能跑掉】。
+   *   高倍局（32x/51x/…）是【全员都能跑掉】= escapes 10/10，
+   *   因为倍率早就超过了所有人的阈值，他们都在自己愿意的位置撤了。
+   *   真正「全灭」（escapes=0）的是【低倍局】——倍率 1.2x，一个都跑不掉。
+   *
+   *   所以高倍局越往上，【留下被爆的人越少】，这正是高倍局的爽点。
+   */
+  t('超过最高阈值的点：全员都跑得掉（escapes = 全场）',
+    spec.filter((r) => r.rate > topThr).every((r) => r.escapes === players.length),
+    spec.filter((r) => r.rate > topThr).map((r) => `${r.rate}:${r.escapes}`).join(' '));
+  t('最低点 escapes = 0（低倍局才是全灭）', spec[0].escapes === 0, String(spec[0].escapes));
+
+  // 实测分布：高倍必须真的抽得到
+  for (const mood of ['log', 'spicy', 'flat']) {
+    let h = [], pending = 0;
+    const v = [];
+    for (let i = 0; i < 5000; i++) {
+      const d = E.decide({ seated: players, bounds: B, history: h, mood, boom: { p: 0.1 }, floor: pending });
+      pending = d.boom ? d.nextFloor : 0;
+      if (d.boom) continue;
+      v.push(d.rate);
+      h.push(d.rate); if (h.length > 8) h.shift();
+    }
+    const over = (t) => v.filter((x) => x >= t).length / v.length * 100;
+    const mx = Math.max(...v);
+    console.log(`  ${mood.padEnd(6)} ≥20x ${over(20).toFixed(1)}%  ≥50x ${over(50).toFixed(1)}%  max ${mx.toFixed(1)}x`);
+    t(`${mood}: 有局出到 ≥20x（原本实测 0.0%）`, over(20) > 0, over(20).toFixed(2) + '%');
+    t(`${mood}: 出现过 ≥40x`, mx >= 40, mx.toFixed(1) + 'x');
+    t(`${mood}: 没有任何一局越过 max_rate 125`, v.every((x) => x <= 125));
+  }
+
+  /**
+   * ⚠️ 权重必须按【log 位置】算而不是【下标位置】。
+   * 谱点在对数刻度上疏密不均：低倍 20 个点挤在 1.2–20，高倍 5 个点摊在 20–125。
+   * 用下标会让高倍点权重 ≈ 0.02，几乎抽不到（实测 ≥50x 只有 0.2%）。
+   */
+  const w = E.shapeWeights(spec, 'log', B);
+  t('shapeWeights 长度与谱一致', w.length === spec.length);
+  t('权重随倍率单调不增', w.every((x, i) => i === 0 || x <= w[i - 1] * 1.0001));
+  /**
+   * ⚠️ 125x 的权重 = (1-1)^1.6 + 1e-6 = 1e-6，几乎抽不到。
+   *   但这是 log 手感的【设计意图】—— 高倍天然极罕见。
+   *   实测 log 下 ≥50x 有 0.6%，spicy 2.2%，flat 3.5%，
+   *   最高能出到 111-114x（抖动带来）。够用了。
+   *   所以这里只断言「不为 0」（1e-6 的下限保证它可能但极罕见）。
+   */
+  t('最高点权重 > 0（1e-6 下限保证可能但极罕见）', w[w.length - 1] > 0, String(w[w.length - 1]));
+  t('最高点权重确实是极小的（log 手感：125x 极罕见）', w[w.length - 1] < 1e-4, w[w.length - 1].toExponential(2));
+  // log 位置下：50x 处的权重应显著高于下标位置的算法
+  const i50 = spec.findIndex((r) => r.rate >= 50);
+  t('50x 处的权重不是最小（说明用了 log 位置而非下标）',
+    i50 < spec.length - 1 && w[i50] > w[w.length - 1],
+    `i50=${i50}/${spec.length - 1} w=${w[i50]?.toExponential(2)}`);
 }
 
 console.log(`\n=== 通过 ${pass} / 失败 ${fail} ===\n`);

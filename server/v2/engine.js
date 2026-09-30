@@ -80,6 +80,47 @@ function buildSpectrum(seated, bounds) {
     // 几何中点：倍率的感知是对数的，算术中点会偏向低倍
     cand.push(Math.sqrt(thrs[i] * thrs[i + 1]));
   }
+
+  /**
+   * ⚠️⚠️ 谱必须【延伸到 max_rate】，不能停在最高玩家阈值。
+   *
+   *   这里原来只把「玩家阈值 + 阈值中点」放进谱，于是谱的最大值
+   *   恒等于房间里最高的那个阈值（实测 20x）。管理员配 max_rate=125，
+   *   但谱只到 20 —— 于是 ≥20x 的局【实测占比 0.0%】，
+   *   ≥50x 也是 0.0%。max_rate 形式上生效、实际完全没用。
+   *
+   *   这和 v1「段顶只到 15x、max_rate=120 从未被读」是同一个病，
+   *   只是换了位置。玩家看不到 20x 以上的局，就永远等不到名场面。
+   *
+   *   正确做法：高倍段（超过最高阈值之后）由配置的对数阶梯补齐。
+   *
+   * ⚠️⚠️ 这里有个【语义陷阱】，我第一次写反了：
+   *   高倍局的 escapes 是【10/10 全员】，不是 0。
+   *   因为 escapes 的含义是「这一局有多少人【跑掉了/能跑掉】」——
+   *   倍率 32x 时，所有人都等到了比��的阈值才跑，他们【都赢了】；
+   *   倍率越高，【留下被爆的人越少】。
+   *
+   *   所以高倍局的真实语义是「绝大多数人能跑掉，留下的人全输」，
+   *   这正是高倍局该有的爽点。真正「全灭」的是【低倍局】
+   *   （倍率 1.2x 时一个都跑不掉，escapes=0）。
+   */
+  const top = thrs[thrs.length - 1];
+  if (bounds.max > top * 1.05) {
+    // 对数阶梯：top → maxRate，按 1.6 倍一档
+    // 用 1.6 而不是更密，因为高倍区本来就该稀疏（越刺激越少见）
+    const ladder = [top];
+    let v = top;
+    while (v < bounds.max) {
+      v *= 1.6;
+      ladder.push(Math.min(v, bounds.max));
+      if (ladder.length > 24) break;   // 安全上限
+    }
+    // 阶梯点全部「没人能跑掉」
+    for (let i = 1; i < ladder.length; i++) {
+      if (ladder[i] > top * 1.001) cand.push(ladder[i]);
+    }
+  }
+
   // 去重 + 钳制到管理员边界
   const seen = new Set();
   const rows = [];
@@ -126,8 +167,23 @@ function defaultSpectrum(bounds) {
  *
  * flat：各段等概率（beta 0.5）
  * spicy：高倍更多（beta < 1）
+ *
+ * ⚠️⚠️ 权重必须按【倍率的 log 位置】算，不能按【数组下标位置】。
+ *
+ *   原来写的是 `pos = i / (len - 1)` —— 等分下标。
+ *   但谱点在对数刻度上极不均匀：低倍区 20 个点挤在 1.2–20x，
+ *   高倍区只有 5 个点摊在 20–125x。等分下标会让低倍区拿走
+ *   几乎全部权重（20/25 = 80% 的点都在前 80% 区间内）。
+ *
+ *   实测：谱修好后（延伸到 125x）≥50x 的局只有 0.2%（log）——
+ *   谱里明明有 50x、80x、125x 这些点，但它们的下标接近末尾，
+ *   权重 (1-0.92)^1.6 ≈ 0.02，几乎抽不到。
+ *
+ *   正确做法：pos = (ln(rate) - ln(min)) / (ln(max) - ln(min))。
+ *   这样「权重随倍率对数递减」才是真的按倍率分布，
+ *   谱点疏密不影响权重分配。
  */
-function shapeWeights(rows, mood) {
+function shapeWeights(rows, mood, bounds) {
   if (!rows.length) return [];
   const betas = {
     log: 1.6,      // 强偏向低倍（默认）
@@ -136,8 +192,12 @@ function shapeWeights(rows, mood) {
   };
   const beta = betas[mood] || betas.log;
 
-  return rows.map((r, i) => {
-    const pos = rows.length === 1 ? 0 : i / (rows.length - 1);
+  const lo = bounds && bounds.min > 0 ? Math.log(bounds.min) : Math.log(rows[0].rate);
+  const hi = bounds && bounds.max > 0 ? Math.log(bounds.max) : Math.log(rows[rows.length - 1].rate);
+  const span = (hi - lo) || 1;
+
+  return rows.map((r) => {
+    const pos = Math.max(0, Math.min(1, (Math.log(Math.max(1e-9, r.rate)) - lo) / span));
     // 权重 ∝ (1 - pos)^beta  —— pos 越大（倍率越高）权重越小
     return Math.pow(1 - pos, beta) + 1e-6;
   });
@@ -352,7 +412,7 @@ function decide(opts) {
   }
 
   const spectrum = buildSpectrum(o.seated, bounds);
-  const weights = shapeWeights(spectrum, o.mood);
+  const weights = shapeWeights(spectrum, o.mood, bounds);
   const history = Array.isArray(o.history) ? o.history : [];
 
   // Jev 给了建议就用它（但必须落在谱上或至少在边界内），否则自己抽
