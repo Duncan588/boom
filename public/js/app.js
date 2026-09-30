@@ -1133,13 +1133,39 @@
    */
   var BET_MIN = 1;
 
-  /** 大数字缩写：用户要求 1000+ 用 K、百万后用 M、十亿后用 B */
+  /**
+   * 大数字缩写：用户要求 1000+ 用 K、百万后 M、十亿后 B。
+   *
+   * 【2026-09-30】补 T 档：超过 100B 再往上就是 1000B、10000B…，
+   * 显示成「1200.00B」既难看又容易看错位数（1200B 还是 12B？）。
+   * 加了 T（万亿）之后，位数永远不超过 4 字符。
+   *
+   * 为什么不加更多档：JS 的 Number 安全整数上限是 9007199254740991（约 9000 万亿 B），
+   * 到那时 T 也用不上。但用户余额不可能到那个量级，T 足够。
+   */
+  var SHORT_UNITS = [
+    [1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']
+  ];
   function fmtShort(n) {
     n = Number(n) || 0;
-    if (n >= 1e9) return (n / 1e9).toFixed(2).replace(/\.?0+$/, '') + 'B';
-    if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
-    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
-    return String(n);
+    var neg = n < 0;
+    n = Math.abs(n);
+    for (var i = 0; i < SHORT_UNITS.length; i++) {
+      var u = SHORT_UNITS[i];
+      if (n >= u[0]) {
+        var v = (n / u[0]).toFixed(2).replace(/\.?0+$/, '');
+        return (neg ? '-' : '') + v + u[1];
+      }
+    }
+    return (neg ? '-' : '') + String(n);
+  }
+
+  /** 缩写反解：'12.5K' → 12500。供输入框回显时用。 */
+  function parseShort(s) {
+    var m = String(s).trim().match(/^(-?[\d.]+)\s*([KMBT]?)$/i);
+    if (!m) return NaN;
+    var mult = { K: 1e3, M: 1e6, B: 1e9, T: 1e12 }[(m[2] || '').toUpperCase()] || 1;
+    return Math.round(parseFloat(m[1]) * mult);
   }
 
   function setBet(v) {
@@ -1151,12 +1177,15 @@
     }
     setBetBtn();
   }
-  // 手动输入：只收数字，去掉逗号和空白。
-  // 边打边把非法字符从框里剔掉（而不是只在状态里忽略），
-  // 否则用户会看到自己打的 'abc' 留在输入框里，但按钮显示 1.00，很困惑。
+  /**
+   * 手动输入：接受纯数字，也接受用户直接打 K/M/B/T。
+   * '12.5K' 会被解析成 12500 —— 省得用户先算一遍再填。
+   * 边打边把非法字符从框里剔掉（而不是只在状态里忽略），
+   * 否则用户会看到自己打的 'abc' 留在输入框里，但按钮显示 1.00，很困惑。
+   */
   $('#betAmt').addEventListener('input', function (e) {
     var el = e.target;
-    var raw = String(el.value).replace(/[^\d]/g, '');
+    var raw = String(el.value).replace(/[^\d.]/g, '');
     if (raw !== el.value) {
       var atEnd = el.selectionStart === el.value.length;
       el.value = raw;
@@ -1166,8 +1195,25 @@
     S.bet = n;
     setBetBtn();
   });
-  // 失焦时把规范化后的值写回（清掉多余前导零等）
-  $('#betAmt').addEventListener('blur', function (e) { setBet(S.bet); });
+  /**
+   * 失焦时做两件事：把框里内容规范化、把数字换成缩写显示。
+   *
+   * ⚠️ 必须在失焦时才转，不能边打边转 —— 用户打 '1' 会立刻变 '1'，
+   *    打 '2' 变 '12'，打到第 4 位超过 1000 就跳成 '1.23K'，
+   *    后面打的数字直接追加到 'K' 后面，彻底没法输入。
+   *    输入过程中框里始终是纯数字，可以放心连打。
+   *
+   * 失焦时也接受 K/M/B/T 后缀：用户直接打 '12.5K' 会被解析成 12500。
+   */
+  $('#betAmt').addEventListener('blur', function (e) {
+    var v = parseShort(e.target.value);
+    setBet(isNaN(v) ? S.bet : v);
+    e.target.value = fmtShort(S.bet);
+  });
+  // 重新获得焦点时还原成真实数字，否则用户没法在里面改数字
+  $('#betAmt').addEventListener('focus', function (e) {
+    e.target.value = String(S.bet);
+  });
   /**
    * 【2026-09-30 第二版】下注区只留「图标 + 金额输入 + 梭哈」。
    *
