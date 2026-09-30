@@ -119,13 +119,6 @@ const dom = new JSDOM(`<!DOCTYPE html><html><body>
     <input id="j_cache" value="4">
     <input id="j_timeout" value="800">
     <input id="j_key" type="password">
-    <input id="j_act_rounds" value="0">
-    <input id="j_act_max" value="0">
-    <input id="j_act_inst" value="0">
-    <button id="j_btn_save"></button>
-    <button id="j_btn_load"></button>
-    <button id="j_btn_act"></button>
-    <button id="j_btn_actoff"></button>
     <div id="j_status"></div>
     <div id="j_dist"></div>
   </div>
@@ -360,6 +353,21 @@ console.log('\n=== 12. 手填下界真的生效（2026-09-30 新需求）===');
   second.value = '2';
   second.dispatchEvent(new win.Event('input', { bubbles: true }));
   ok(win.w6Read()[1].min === 2, '改第 2 行下界后 w6Read() 读到 2');
+}
+
+console.log('\n=== 12a. 后台只有一个保存按钮（回归：曾有两个，管理员会漏点）===');
+{
+  // mode 7 的 Jev 配置已并入 btnSaveOdds，所以面板里不该再有独立保存按钮
+  const all = Array.from(doc.querySelectorAll('button[id]')).map((b) => b.id);
+  const saves = all.filter((id) => /save/i.test(id));
+  ok(saves.length === 1, '保存按钮应只有 1 个，实际 ' + saves.length + ' 个：' + saves.join(','));
+  ok(saves[0] === 'btnSaveOdds', '唯一的保存按钮应是 btnSaveOdds，实际 ' + saves[0]);
+  ok(!doc.getElementById('j_btn_save'), 'Jev 面板不应再有独立保存按钮');
+  ok(!doc.getElementById('j_btn_load'), 'Jev 面板不应再有刷新按钮');
+  // w7Apply / w7Body 必须在 inline JS 里存在（btnSaveOdds 会调它们）
+  ok(typeof win.eval('typeof w7Apply') === 'string' && win.eval('typeof w7Apply') === 'function',
+     'w7Apply 未定义 —— btnSaveOdds 在 mode 7 下会抛错');
+  ok(win.eval('typeof w7Body') === 'function', 'w7Body 未定义');
 }
 
 console.log('\n=== 12b. mode 7 不得提交 odds_table_json（回归：曾清空管理员的表）===');

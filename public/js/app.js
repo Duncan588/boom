@@ -559,8 +559,10 @@
     $('#meName').textContent = S.me.name || '玩家';
     $('#meAvatar').src = avatar(S.me);
     $('#meCoins').textContent = fmtC(S.me.coins);
+    // 余额变了要同步梭哈按钮的可用状态
+    syncAllIn();
   }
-  function setCoins(c) { S.me.coins = c; $('#meCoins').textContent = fmtC(c); }
+  function setCoins(c) { S.me.coins = c; $('#meCoins').textContent = fmtC(c); syncAllIn(); }
 
   /* ---------------- WebSocket ---------------- */
   function connectWS() {
@@ -1146,10 +1148,29 @@
   });
   // 失焦时把规范化后的值写回（清掉多余前导零等）
   $('#betAmt').addEventListener('blur', function (e) { setBet(S.bet); });
-  $('#minus').onclick = function () { setBet(S.bet <= 10 ? 1 : S.bet - (S.bet > 100 ? 10 : 1)); };
-  $('#plus').onclick = function () { setBet(S.bet + (S.bet >= 100 ? 10 : 1)); };
+  /**
+   * 【2026-09-30】去掉 +/− 步进，改为「最小 / 一半 / 最大 / 梭哈」。
+   *
+   * 原来的 minus/plus 是固定步进（<10 减 1，>100 加 10），
+   * 想要 37 或 250 只能手输 —— 存在感不强的死控件。
+   *
+   * ⚠️ 梭哈 = 全部余额，一键入框但【不自动提交】——
+   *    误触一次把全部身家压上去的代价太高，必须让用户自己再点一次下注。
+   *    剩余 0 时按钮禁用。
+   */
   $('#btnMin').onclick = function () { setBet(1); };
+  $('#btnHalf').onclick = function () {
+    if (S.me) setBet(Math.max(1, Math.floor(S.me.coins / 2)));
+  };
   $('#btnMax').onclick = function () { if (S.me) setBet(Math.max(1, Math.floor(S.me.coins))); };
+  $('#btnAllIn').onclick = function () {
+    if (S.me) setBet(Math.max(1, Math.floor(S.me.coins)));
+  };
+  // 梭哈按钮随余额禁用：没钱时置灰，避免点了没反应
+  function syncAllIn() {
+    var b = $('#btnAllIn');
+    if (b) b.disabled = !(S.me && S.me.coins >= 1);
+  }
   // 两个独立开关：🎵 背景音乐 / 🔊 音效（互不影响）
   // 用 localStorage 记住选择，刷新后不再被重置为默认开启
   function loadSoundPref() {

@@ -87,18 +87,24 @@
       <div class="phase" id="phase">连接中…</div>
 
       <div class="betbar">
+        <!--
+          【2026-09-30】去掉 +/− 步进器。
+          原来只有 − 和 + 两个固定步进，作用有限却占了最显眼的位置；
+          改成「快捷金额 + 梭哈」，把空间给真正有用的操作。
+          金额仍可直接点输入框手改。
+        -->
+        <div class="bet-quick" id="betQuick">
+          <button class="btn btn-sm" id="btnMin">最小</button>
+          <button class="btn btn-sm" id="btnHalf">一半</button>
+          <button class="btn btn-sm" id="btnMax">最大</button>
+          <button class="btn btn-sm btn-allin" id="btnAllIn">梭哈</button>
+        </div>
         <div class="stepper">
-          <button id="minus" aria-label="减少">−</button>
           <div class="val">
             <img class="qun-ic" src="/assets/qun.png" alt="">
             <input id="betAmt" class="bet-input" type="text" inputmode="numeric"
                    autocomplete="off" aria-label="下注金额" value="10">
           </div>
-          <button id="plus" aria-label="增加">+</button>
-        </div>
-        <div class="bet-actions">
-          <button class="btn btn-sm" id="btnMin">最小</button>
-          <button class="btn btn-sm" id="btnMax">最大</button>
         </div>
       </div>
 

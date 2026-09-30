@@ -476,10 +476,28 @@
 
 /* ---------- 下注区 ---------- */
 .betbar { display: flex; gap: 10px; align-items: stretch; margin-top: 10px;
-          position: relative; z-index: 1; }
+          position: relative; z-index: 1; flex-wrap: wrap; }
+/**
+ * 【2026-09-30】快捷金额行：最小 / 一半 / 最大 / 梭哈。
+ * 原来这一行是 .bet-actions（只有最小/最大）挤在 stepper 右边，
+ * 现在独立成行放在上方，宽度铺满 —— 四个按钮等宽，触摸目标够大。
+ */
+.bet-quick { display: flex; gap: 8px; width: 100%; }
+.bet-quick .btn { flex: 1; min-height: 38px; }
+/* 梭哈用警示色，和「最大」区分开：一个是梭哈，一个是留一点余地 */
+.bet-quick .btn-allin {
+  background: linear-gradient(135deg, rgba(255,107,74,.22), rgba(255,184,108,.18));
+  border-color: rgba(255,107,74,.5); color: #ffb86c; font-weight: 800;
+}
+.bet-quick .btn-allin:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(255,107,74,.34), rgba(255,184,108,.26));
+  border-color: rgba(255,107,74,.75);
+}
+.bet-quick .btn-allin:disabled { opacity: .38; cursor: not-allowed; }
+
 .stepper {
-  flex: 1; display: flex; align-items: center; justify-content: space-between;
-  padding: 0 6px; border-radius: var(--r-sm);
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 0 6px; border-radius: var(--r-sm); min-width: 0;
   background: var(--surface-2); border: 1px solid var(--stroke-2);
 }
 .stepper button {

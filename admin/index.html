@@ -393,20 +393,12 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
           Jev 自动切到菩萨人格并受该活动的倍率带约束 —— 这里不需要单独配置。</span>
         </div>
 
-        <div class="row">
-          <div class="f">
-            <label></label>
-            <button class="btn" id="j_btn_save">保存 Jev 设置</button>
-          </div>
-          <div class="f">
-            <label></label>
-            <button class="btn" id="j_btn_load">刷新状态</button>
-          </div>
+        <div class="hint" style="margin:10px 0 4px">
+          保存请用下方<b>「保存赔率设置」</b>那一个按钮 —— 赔率模式和 Jev 设置会一次存完。
         </div>
         <div id="j_status" class="hint" style="margin-top:8px"></div>
         <div id="j_dist" style="margin-top:8px"></div>
       </div>
-
       <!--
         模式 6：百分比分布表。
 
@@ -1376,29 +1368,24 @@ function w7Body() {
   };
 }
 
-$('#j_btn_save').onclick = function(){
-  call('/admin/api/jev', w7Body()).then(function(r){
-    if (!r || r.error) { toast('保存失败：' + (r && r.error), 'err'); return; }
-    // 回显真实分布 —— 不能只说「已保存」
-    var p = r.preview || {};
-    var rows = (p.bands || []).map(function(b){
-      return '<tr><td>' + b.label + '</td><td>' + b.pct + '%</td></tr>';
-    }).join('');
-    $('#j_dist').innerHTML =
-      '<b>保存后实际分布</b>（' + (p.rounds||0) + ' 局模拟，平均 ' +
-      (p.avgWinShare!=null ? p.avgWinShare : '-') + '% 的人赢）' +
-      '<table class="tbl" style="margin-top:6px"><tr><th>倍率段</th><th>占比</th></tr>' + rows + '</table>' +
-      '<span class="hint">' + (p.note||'') + '</span>';
-    w7Status(r.status);
-    toast('已保存，下一局生效', 'ok');
-  }).catch(function(e){ toast('保存失败：' + e.message, 'err'); });
-};
-
-$('#j_btn_load').onclick = function(){
-  $('#j_dist').innerHTML = '';
-  w7Load();
-  toast('已刷新', 'ok');
-};
+/**
+ * 【2026-09-30】Jev 设置的保存已并入「保存赔率设置」（btnSaveOdds）。
+ * 这里只保留读取与状态渲染，不再单独提供保存按钮 ——
+ * 两个保存按钮意味着管理员会以为要分别点，漏掉其中一个。
+ */
+function w7Apply(r) {
+  // 回显真实分布 —— 不能只说「已保存」
+  var p = r.preview || {};
+  var rows = (p.bands || []).map(function(b){
+    return '<tr><td>' + b.label + '</td><td>' + b.pct + '%</td></tr>';
+  }).join('');
+  $('#j_dist').innerHTML =
+    '<b>保存后实际分布</b>（' + (p.rounds||0) + ' 局模拟，平均 ' +
+    (p.avgWinShare!=null ? p.avgWinShare : '-') + '% 的人赢）' +
+    '<table class="tbl" style="margin-top:6px"><tr><th>倍率段</th><th>占比</th></tr>' + rows + '</table>' +
+    '<span class="hint">' + (p.note||'') + '</span>';
+  w7Status(r.status);
+}
 
 $('#btnSaveOdds').onclick=function(){
   /**
@@ -1464,11 +1451,15 @@ $('#btnSaveOdds').onclick=function(){
        * /admin/api/odds-preview 跑的是 simulate()，而 simulate 不带 ctx，
        * 所以 mode 7 在它眼里等于「表驱动 + jev 未启用」。
        * 直接报它的数字 = 报了一个和实际行为无关的分布。
-       * mode 7 的真实分布由「保存 Jev 设置」返回的 jev.preview 给出。
+       * mode 7 的真实分布由 jev.preview 给出 —— 见下面那次请求。
        */
       if (mode === '7') {
-        toast('已生效（下一局开始）　Jev 设置请点「保存 Jev 设置」', 'ok');
-        return;
+        // mode 7：赔率字段已存完，再把 Jev 那五项一起存，全流程只需点一次
+        return call('/admin/api/jev', w7Body()).then(function(jr){
+          if (!jr || jr.error) { toast('赔率已保存，但 Jev 设置失败：' + (jr && jr.error), 'err'); return; }
+          w7Apply(jr);
+          toast('已生效（下一局开始）', 'ok');
+        }).catch(function(e){ toast('赔率已保存，但 Jev 设置失败：' + e.message, 'err'); });
       }
       var top = p.buckets.slice().sort(function(a,b){ return b.count - a.count; })[0];
       toast('已生效（下一局开始）　中位 ' + p.median + 'x　平均 ' + p.avg + 'x　瞬爆 ' + p.instantBoomPct + '%'
