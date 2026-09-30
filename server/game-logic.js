@@ -342,6 +342,67 @@ function decideRate(cfg, pot, pool, event, ctx) {
     const jev = require('./jev');
     const pick = jev.pickBand(seated, ctx.lastBoom ?? null, null);
     return { rate: pick.rate, fast: false, mode: '7-jev', jev: { band: pick.band, source: pick.source, confidence: pick.confidence } };
+
+  } else if (mode === '8') {
+    /**
+     * 【2026-09-30 新增】老虎机算法（v3）—— 日常模式的零成本选项。
+     *
+     * 【它和 mode 7 的区别】
+     *   mode 7 (Jev)  每一局可能调用一次外部 AI（约 $0.17/局），由 AI 选倍率段。
+     *   mode 8 (v3)   纯本地随机游走，零 API 成本，行为完全可预测地稳定。
+     *
+     * 【为什么数字不可推算 —— 三个叠加的随机源】
+     *   ① 瞬爆：每局独立掷骰，与历史完全无关
+     *   ② 中心游走：在 log 空间按「档位」上/下走一格（每格 ×3.16），
+     *      跳变概率随停留时间上升但封顶 0.55
+     *   ③ 采样：在中心邻域内对数均匀
+     *   三者叠加后相邻局差、连续相同值、间隔节奏都没有可观察的内部结构。
+     *
+     * 【为什么不做「连着 6 局不许重复」】
+     *   Provably fair crash 游戏（Stake/Aviator）和老虎机认证标准（GLI-11）
+     *   都【明确不】在单局层面过滤结果 —— 过滤掉的痕迹本身就是新模式，
+     *   玩家观察几轮就能推出「上一局 100x → 这局必然不是 100x」。
+     *   行业做法是让分布自己在时间上漂移，也就是这里的中心游走。
+     *
+     * 爆点仍然只有一个、全场共享同一条 rateAt 曲线，不做任何按人差异化。
+     * 无人下注时同样不消耗任何东西（v3 是纯本地算法，没有 API 调用）。
+     */
+    const v3 = require('./v3/engine');
+    // 后台存的是「百分比」字符串（便于运营填 10 表示 10%），
+    // 这里统一转成 0–1。留空 → undefined → 引擎用默认 10%。
+    /**
+     * ⚠️ 留空必须落到【引擎默认值】，不能落到 0。
+     *    留空 =「没配」≠「配成 0%」—— 后者会让运营以为设了瞬爆却一局都不爆
+     *    （这个 bug 实测踩过：slot_boom_rate 留空 → 瞬爆 0%）。
+     *
+     * 三项的语义和量级都不同，不能用同一个解析函数：
+     *   boom_rate  后台填百分比（10 = 10%）→ 引擎要 0–1
+     *   width      直接是倍数（2.5 = ±2.5 倍），不是百分比
+     *   jump_rate  直接是 0–1 的概率（0.5 = 50%）
+     */
+
+    // ⚠️ 默认值【已经是 0–1 的概率】，不能再除100 ——
+    //   早先写成 num(cfg, 0.10) / 100 = 0.001，瞬爆率被压到 0.1%。
+    //   这里分两段：先取「原始值」（后台是百分比），再统一归一化到 0–1。
+    const SLOT_DEFAULTS = { boomPct: 10, width: 2.5, jumpRate: 0.5 };
+    const num = (v, def) => {
+      if (v === undefined || v === null || v === '') return def;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : def;
+    };
+    const boomRate = Math.max(0, Math.min(1, num(cfg.slot_boom_rate, SLOT_DEFAULTS.boomPct) / 100));
+    const d = v3.rollRange({
+      min: Math.max(min, 1),
+      max: max,
+      boomRate,
+      width: Math.max(1.05, num(cfg.slot_width, SLOT_DEFAULTS.width)),
+      jumpRate: Math.max(0, Math.min(1, num(cfg.slot_jump_rate, SLOT_DEFAULTS.jumpRate))),
+    });
+    return {
+      rate: d.rate, fast: false,
+      mode: '8-slot',
+      event: { boom: d.boom, center: d.center },
+    };
   }
 
   /**

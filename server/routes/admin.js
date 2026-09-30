@@ -285,6 +285,46 @@ function register(router) {
     }
   });
 
+  /**
+   * 老虎机（mode 8）预览。
+   *
+   * ⚠️ 为什么不能用 odds-preview：那个接口跑的是 game-logic.simulate()，
+   *    而 simulate 不带 ctx、不走 mode 8 分支 —— 它按表驱动算，
+   *    报出来的是和实际行为完全无关的分布（mode 7 当年也是这个坑）。
+   *    这里必须调 decideRate() 本尊，才是真的「保存后这一局会出什么」。
+   */
+  router.get('/admin/api/slot-preview', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const rounds = Math.min(50000, Math.max(100, Number(req.query.get('rounds')) || 2000));
+    const cfg = db.allSettings();
+    const { decideRate } = require('../game-logic');
+    try {
+      const v3 = require('../v3/engine');
+      v3.resetRange();
+      const rates = [];
+      for (let i = 0; i < rounds; i++) {
+        // mode 8 的倍率不依赖在场玩家（纯本地算法），所以传空 pot 也不会
+        // 走 base 分支 —— 但为免万一，这里显式给一个非零 pot。
+        rates.push(decideRate(cfg, 1, 0, null, {}).rate);
+      }
+      const boom = rates.filter((r) => r <= 1.01).length;
+      const s = rates.slice().sort((a, b) => a - b);
+      json(res, 200, {
+        ok: true,
+        rounds,
+        boomPct: +(boom / rounds * 100).toFixed(1),
+        median: s[Math.floor(rounds / 2)],
+        p90: s[Math.floor(rounds * 0.9)],
+        max: s[rounds - 1],
+        min: s[0],
+        over100Pct: +(rates.filter((r) => r >= 100).length / rounds * 100).toFixed(1),
+        distinct: new Set(rates).size,
+      });
+    } catch (e) {
+      json(res, 500, { error: '预览失败：' + e.message });
+    }
+  });
+
   router.post('/admin/api/settings', async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const b = await readBody(req);
@@ -423,6 +463,10 @@ function register(router) {
     const ALLOW = new Set([
       'daily_enabled', 'daily_window_from', 'daily_window_to',
       'daily_min_rate', 'daily_max_rate', 'daily_weight',
+      // 【2026-09-30 新增】老虎机参数。
+      // ⚠️ 这两个键之前不在白名单里 —— 前端提交时被 `if (!ALLOW.has(k)) continue`
+      //    静默丢弃，运营在面板上怎么改都不生效。这正是「配了没反应」的成因。
+      'daily_boom_rate', 'daily_width',
       'daily_guild_id', 'daily_channel_id', 'daily_announce',
     ]);
     const applied = {};
@@ -431,9 +475,17 @@ function register(router) {
       db.setSetting(k, String(v));
       applied[k] = String(v);
     }
-    // 立刻重算今天的随机小时区间（如果窗口变了）
+    /**
+     * 立刻重算今天的随机小时区间（如果窗口变了）。
+     *
+     * 【2026-09-30】倍率类参数改动也要重置 —— 活动条目是启动/开启时
+     * 写进 events_json 的，运营在面板上改完瞬爆率后，若活动已开着，
+     * events_json 里还是旧值，必须让下一次 tick 重建条目才生效。
+     */
     const { daily } = require('../daily-activity');
-    if (applied.daily_window_from || applied.daily_window_to) {
+    if (applied.daily_window_from || applied.daily_window_to ||
+        applied.daily_min_rate || applied.daily_max_rate ||
+        applied.daily_boom_rate || applied.daily_width || applied.daily_weight) {
       db.setSetting('daily_hour', '0');   // 0 = 强制下一 tick 重抽
       db.setSetting('daily_hour_day', '');
     }

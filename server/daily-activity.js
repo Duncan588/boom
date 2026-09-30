@@ -90,7 +90,16 @@ class DailyHighRate {
       min: Number(g('min_rate')) || 1,
       max: Number(g('max_rate')) || 100,
       weight: Number(g('weight')) ?? 0.85,
-      boom: Math.max(0, Math.min(1, Number(g('boom_rate'))) || 0),
+      // 后台面板填的是【百分比】（30 = 30%），这里统一转成 0–1。
+      // ⚠️ 早先这里直接 Number() 当 0–1 用，于是面板填 30 会被当成 300%
+      //    再被 Math.min(1, ...) 钳成 1 → 活动变成每局都瞬爆。
+      //    同时空值必须落回 0（=活动不瞬爆），和日常的「留空=10%」区分开：
+      //    活动的瞬爆率是运营显式决策，没配就是不要瞬爆。
+      boom: (function () {
+        const v = Number(g('boom_rate'));
+        if (!Number.isFinite(v) || g('boom_rate') === '' || g('boom_rate') == null) return 0;
+        return Math.max(0, Math.min(100, v)) / 100;
+      })(),
       width: Number(g('width')) || 1.8,
       guildId: g('guild_id'),
       channelId: g('channel_id'),

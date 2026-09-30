@@ -295,7 +295,19 @@ function rollRange(cfg) {
       //    刚调好的新默认值 —— 活动期用的正是这条路径，不改就等于没修。
       width: cfg.width || undefined,
       jumpRate: cfg.jumpRate || undefined,
-      boomQuota: cfg.boomRate === undefined || cfg.boomRate === '' ? 0 : Number(cfg.boomRate),
+      /**
+       * ⚠️ 原来这里是 `undefined → 0`，意思是「没传瞬爆率就永不瞬爆」。
+       *   实测踩过：后台把slot_boom_rate 留空 → 瞬爆 0.1%，
+       *   运营会以为「配了 10% 却一局都不爆」。
+       *   留空 =没配，应该落到 createEngine 的默认 10%，而不是 0。
+       *   只有「显式传 0」才是真的不要瞬爆。
+       */
+      boomQuota: (function () {
+        const v = cfg.boomRate;
+        if (v === undefined || v === null || v === '') return undefined;  // → 引擎默认 10%
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : undefined;
+      })(),
     });
     _rangeState.set(key, eng);
   }

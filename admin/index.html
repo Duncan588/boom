@@ -316,6 +316,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f">
           <label>赔率模式</label>
           <select class="inp" id="s_mode">
+            <option value="8">老虎机（随机游走 · 零 API 成本）</option>
             <option value="7">Jev 做庄（AI 选倍率段）</option>
             <option value="6">百分比分布表（推荐）</option>
             <option value="5">加权分布（旧版，参数多）</option>
@@ -352,6 +353,43 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         爆点全场共享同一条曲线，不按人差别赔付。<b>没人下注的一局不会调用 API</b>；
         连续多局若房间构成相近，复用上一次的判断结果以节省费用。</span>
       </div>
+      <!--
+        模式 8：老虎机（server/v3/engine.js）
+
+        【它做什么】纯本地随机游走，零 API 成本（mode 7 每局约 $0.17）。
+        每一局的倍率由三层叠加产生：瞬爆独立掷骰 + 中心按档位游走 + 邻域对数均匀采样。
+
+        【为什么数字看起来随机但推不出来】
+        关键是「中心游走」而不是「按上一局过滤」。中心在 log 空间按档位
+        上/下走一格（每格 ×3.16），跳变概率随停留时间上升但封顶 0.55 ——
+        于是「连续几局都在高倍区」是因为现在轮到高倍期，而不是因为
+        上一局出了什么。玩家看到 100x 之后是 50x，推不出下一局。
+
+        【为什么不设「连着不许重复」】
+        Provably fair crash（Stake/Aviator）和老虎机认证标准（GLI-11）
+        都明确不在单局层面过滤结果 —— 过滤掉的痕迹本身就是可推算的模式。
+      -->
+      <div class="panel-sub" id="w8Panel">
+        <b>老虎机（v3 随机游走）</b>
+        <span class="hint">纯本地算法，<b>不调用任何外部 API，零成本</b>。
+        倍率范围沿用上方的「最低/最高爆点」。每一局由瞬爆判定、中心按档位游走、
+        邻域内对数均匀采样三层叠加产生 —— 中心漂移带来起伏，随机性使倍率不可推算。
+        <b>爆点全场共享同一条曲线，不按人差别赔付。</b></span>
+      </div>
+      <div id="w8Body">
+        <div class="row">
+          <div class="f">
+            <label>瞬爆率（%）</label>
+            <input class="inp" id="s8_boom" type="number" min="0" max="100" step="1" placeholder="10">
+          </div>
+        </div>
+        <div class="hint" style="margin-top:6px">
+          瞬爆 = 该局直接 1.00x 结算（刚起飞就炸），每局独立随机。
+          长期频率收敛到这个值，<b>没有固定节奏或配额</b>，玩家数不出来。
+          留空 = 10%。
+        </div>
+      </div>
+
       <div id="w7Body">
         <div class="row">
           <div class="f">
@@ -617,7 +655,9 @@ function loadActivity(){
       ['daily_window_to','时段止（不含，最晚取 to−1）','num'],
       ['daily_min_rate','最低倍率','num'],
       ['daily_max_rate','最高倍率','num'],
-      ['daily_weight','高倍偏置 0–1（越大越偏高倍）','num'],
+      ['daily_boom_rate','瞬爆率 %（0 = 不要瞬爆。库里存 0–1，这里按 % 显示/提交）','pct01'],
+      ['daily_width','采样邻域（留空 = 2.5；小于 2 会卡在单一倍率）','num'],
+      ['daily_weight','高倍偏置 0–1（已废弃，倍率改由老虎机引擎抽取）','num'],
       ['daily_guild_id','Discord 服务器 ID','text'],
       ['daily_channel_id','发布频道 ID','text'],
       ['daily_announce','发频道播报','bool'],
@@ -630,6 +670,17 @@ function loadActivity(){
       + '</div>'
       + '<div class="frow">'+F.map(function(f){
           var v=d.raw&&d.raw[f[0]]!=null?d.raw[f[0]]:'';
+          /**
+           * pct01：库里存 0–1，面板按【百分比】显示与提交。
+           * 运营看到「30」就该是 30%，而不是 0.3。
+           * ⚠️ 不做这个转换的话，面板填 30 → 存 30 → daily-activity 读成
+           *    300% 再被钳成 100% → 活动变成每局都瞬爆。
+           */
+          if(f[2]==='pct01'){
+            var pv = (v===''||v==null) ? '' : (Number(v)*100);
+            return '<div class="fgrow"><label>'+esc(f[1])+'</label>'
+              +'<input class="fi" data-dk="'+f[0]+'" data-pct01="1" type="number" min="0" max="100" step="1" value="'+(pv===''?'':Math.round(pv*100)/100)+'"></div>';
+          }
           if(f[2]==='bool'){
             return '<div class="fgrow"><label>'+esc(f[1])+'</label>'
               +'<select class="fi" data-dk="'+f[0]+'"><option value="1"'+(v==='1'?' selected':'')+'>开启</option>'
@@ -641,7 +692,12 @@ function loadActivity(){
       + '<button class="btn btn-primary" id="dailySave" style="margin-top:12px">保存每日活动设置</button>';
     $('#dailySave').onclick=function(){
       var body={};
-      $$('#dailyBox [data-dk]').forEach(function(el){ body[el.dataset.dk]=el.value; });
+      $$('#dailyBox [data-dk]').forEach(function(el){
+        // pct01 字段：面板是百分比，库里是 0–1，提交时除 100。
+        body[el.dataset.dk] = el.dataset.pct01
+          ? (el.value==='' ? '' : Number(el.value)/100)
+          : el.value;
+      });
       call('/admin/api/daily',body,'POST').then(function(r){
         $('#dailyMsg').textContent='';
         if(r&&r.ok) loadActivity();
@@ -868,6 +924,9 @@ function loadSettings(){
     $('#s_announce').value=s.announce||'';
     // 赔率
     $('#s_mode').value=s.odds_mode||'5';
+    // 老虎机（mode 8）参数回填。留空显示为占位符默认 10%。
+    var s8b = $('#s8_boom');
+    if (s8b) s8b.value = s.slot_boom_rate!=null && s.slot_boom_rate!=='' ? s.slot_boom_rate : '';
     /* odds_value / band_* / base_random / rake / pool / robot_* 已从界面删除
        （test/odds-field-audit.js 实测在模式 6 下零作用）。
        仍需读取 min_rate / max_rate —— 它们是安全护栏，见下。 */
@@ -1150,6 +1209,16 @@ function w6Preview(){
   if (b7) b7.style.display = on7 ? '' : 'none';
   if (on7 && !w7Loaded) { w7Loaded = true; w7Load(); }
 
+  /**
+   * 【mode 8 / 老虎机面板显隐】和 w7 同一个套路：
+   * panel-sub 与 body 必须【两个都】显隐，只改一个会出现「有标题没输入框」。
+   */
+  var on8 = mode === '8';
+  var p8 = document.getElementById('w8Panel');
+  if (p8) p8.style.display = on8 ? '' : 'none';
+  var b8 = document.getElementById('w8Body');
+  if (b8) b8.style.display = on8 ? '' : 'none';
+
   void 0;
   /**
    * ⚠️ 这里【不能】在页面加载时就把按钮藏掉。
@@ -1429,6 +1498,16 @@ $('#btnSaveOdds').onclick=function(){
     w_top_min:$('#s_wtopmin').value, w_top_max:$('#s_wtopmax').value,
     w_boom:$('#s_wboom').value, w_boom_max:$('#s_wboommax').value
   };
+  /**
+   * 【mode 8 / 老虎机】瞬爆率跟着「保存赔率设置」一起存 ——
+   * 用户此前明确要求全流程只点一次，不要第二个保存按钮。
+   * 存的是【百分比字符串】，服务端 decideRate 会除以 100 转成 0–1。
+   */
+  if (mode === '8') {
+    var b8v = $('#s8_boom').value;
+    body.slot_boom_rate = b8v === '' ? '' : Math.max(0, Math.min(100, Number(b8v) || 0));
+  }
+
   // 只在 mode 6 下提交分布表；其它模式一律不碰它
   if (mode === '6') body.odds_table_json = JSON.stringify(rows);
   call('/admin/api/settings', body).then(function(r){
@@ -1453,6 +1532,19 @@ $('#btnSaveOdds').onclick=function(){
        * 直接报它的数字 = 报了一个和实际行为无关的分布。
        * mode 7 的真实分布由 jev.preview 给出 —— 见下面那次请求。
        */
+      if (mode === '8') {
+        /**
+         * ⚠️ 不能报 /admin/api/odds-preview 的数字 ——
+         *    那个接口跑的是 simulate()，它不带 ctx，mode 8 在它眼里
+         *    等于「表驱动」，报出来的是和实际行为无关的分布。
+         *    mode 8 的真实分布必须由 decideRate 本尊给出。
+         */
+        return call('/admin/api/slot-preview?rounds=2000', null, 'GET').then(function(sp){
+          if (!sp || sp.error) { toast('赔率已保存，但老虎机预览失败：' + (sp && sp.error), 'err'); return; }
+          toast('已生效（下一局开始）　老虎机　瞬爆 ' + sp.boomPct + '%　中位 '
+                + sp.median + 'x　p90 ' + sp.p90 + 'x　≥100x 占 ' + sp.over100Pct + '%', 'ok');
+        }).catch(function(e){ toast('赔率已保存，下一局生效', 'ok'); });
+      }
       if (mode === '7') {
         // mode 7：赔率字段已存完，再把 Jev 那五项一起存，全流程只需点一次
         return call('/admin/api/jev', w7Body()).then(function(jr){
