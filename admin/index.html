@@ -388,32 +388,9 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
           </div>
         </div>
 
-        <div class="panel-sub"><b>活动段</b>
-          <span class="hint">活动段内自动切到<b>菩萨人格</b>，并强制执行倍率上限与秒爆比例。</span>
-        </div>
-        <div class="row">
-          <div class="f">
-            <label>活动段生效局数（0 = 不启用）</label>
-            <input class="inp" id="j_act_rounds" type="number" min="0" step="10">
-          </div>
-          <div class="f">
-            <label>活动段最高倍率（0 = 不限制）</label>
-            <input class="inp" id="j_act_max" type="number" min="0" step="1">
-          </div>
-          <div class="f">
-            <label>秒爆百分比（0-100）</label>
-            <input class="inp" id="j_act_inst" type="number" min="0" max="100" step="1">
-          </div>
-        </div>
-        <div class="row">
-          <div class="f">
-            <label></label>
-            <button class="btn" id="j_btn_act">一键开启活动段</button>
-          </div>
-          <div class="f">
-            <label>一键结束</label>
-            <button class="btn" id="j_btn_actoff">结束活动段</button>
-          </div>
+        <div class="panel-sub"><b>活动时段</b>
+          <span class="hint">在<b>「每日高倍活动（自动）」</b>里设置。命中活动的那一小时，
+          Jev 自动切到菩萨人格并受该活动的倍率带约束 —— 这里不需要单独配置。</span>
         </div>
 
         <div class="row">
@@ -1335,7 +1312,10 @@ $('#s_mode').onchange = function(){
 var w7Loaded = false;
 
 function w7Load() {
-  return call('/admin/api/jev').then(function(r){
+  // ⚠️ 必须显式传 'GET'：本项目的 call(p, body, method) 默认 method 是 POST，
+  //    而 /admin/api/jev 只注册了 GET。省略第三个参数会 404，
+  //    表现为「面板输入框全空 + 提示未配置」—— 看起来像没配置，实际是请求发错了。
+  return call('/admin/api/jev', null, 'GET').then(function(r){
     if (!r || r.error) return;
     var c = r.config || {};
     $('#j_enabled').value  = c.enabled ? '1' : '0';
@@ -1343,9 +1323,6 @@ function w7Load() {
     $('#j_sample').value   = c.sampleRate;
     $('#j_cache').value    = c.cacheRounds;
     $('#j_timeout').value  = c.timeoutMs;
-    $('#j_act_rounds').value = c.actRounds;
-    $('#j_act_max').value    = c.actMax;
-    $('#j_act_inst').value   = c.actInstant;
     // key 不回填，只提示来源
     $('#j_key').placeholder = (c.hasKeyInSettings || c.hasEnvKey)
       ? '已配置（保存时留空表示不修改）' : '未配置，留空则用环境变量 TYPESAFE_API_KEY';
@@ -1354,7 +1331,13 @@ function w7Load() {
       $('#j_enabled').value = '0';
     }
     w7Status(r.status, (r.personas||{})[c.persona]);
-  }).catch(function(){ /* 面板加载失败不该阻塞整个后台 */ });
+  }).catch(function(e){
+    // ⚠️ 不要静默失败。面板加载不出来时必须让人看见原因，
+    //    否则就是「输入框全空 + 提示未配置」，看起来像没配 key。
+    $('#j_status').innerHTML = '<b style="color:#f66">Jev 配置加载失败：</b>' +
+      (e && e.message ? e.message : '未知错误') +
+      ' —— 请刷新页面重试；若持续失败请检查 boom.log。';
+  });
 }
 
 function w7Status(s, persona) {
@@ -1388,9 +1371,6 @@ function w7Body() {
     sampleRate:   $('#j_sample').value,
     cacheRounds:  $('#j_cache').value,
     timeoutMs:    $('#j_timeout').value,
-    actRounds:    $('#j_act_rounds').value,
-    actMax:       $('#j_act_max').value,
-    actInstant:   $('#j_act_inst').value,
     apiKey:       $('#j_key').value,
     previewRounds: 400,
   };
@@ -1418,28 +1398,6 @@ $('#j_btn_load').onclick = function(){
   $('#j_dist').innerHTML = '';
   w7Load();
   toast('已刷新', 'ok');
-};
-
-$('#j_btn_act').onclick = function(){
-  call('/admin/api/jev/activity', {
-    enabled: true,
-    rounds:  $('#j_act_rounds').value,
-    maxRate: $('#j_act_max').value,
-    instantPct: $('#j_act_inst').value,
-  }).then(function(r){
-    if (!r || r.error) { toast('开启失败：' + (r && r.error), 'err'); return; }
-    var a = r.status.activity;
-    toast('活动段已开启：' + a.roundsLeft + ' 局 · 最高 ' + (a.maxRate||'不限') + 'x · 秒爆 ' + (a.instantPct||0) + '%', 'ok');
-    w7Status(r.status);
-  });
-};
-
-$('#j_btn_actoff').onclick = function(){
-  call('/admin/api/jev/activity', { enabled: false }).then(function(r){
-    if (!r || r.error) { toast('结束失败：' + (r && r.error), 'err'); return; }
-    toast('活动段已结束', 'ok');
-    w7Status(r.status);
-  });
 };
 
 $('#btnSaveOdds').onclick=function(){

@@ -205,13 +205,21 @@ function decideRate(cfg, pot, pool, event, ctx) {
      *
      * 爆点仍然【只有一个】，全场共享同一条 rateAt 曲线 —— 与前六个模式完全一致，
      * 不引入任何按人差异化的东西。Jev 只决定这一局落在哪个倍率段，
-     * 段内取多少倍率由 decideRateJev 里的 Math.random() 完成。
+     * 段内取多少倍率由 Math.random() 完成。
      *
      * 分段边界贴着在场玩家的逃跑阈值分位数自适应（见 server/jev-bands.js），
      * 所以后台那张百分比表在 mode 7 下不参与选段，只作为降级基线与后台预览对照。
      *
-     * ctx 形如 { seated:[{ar,thr,lossStreak}], lastBoom, act }，由 engine 传入。
-     * 缺 ctx 或无人 → 直接退回 mode 6 的表驱动，绝不在空房间调用外部 API。
+     * ctx 形如 { seated:[{ar,thr,lossStreak}], lastBoom }，由 engine 传入。
+     * 缺 ctx 或无人 → 直接退回表驱动，绝不在空房间调用外部 API。
+     *
+     * ⚠️ 命中限时活动时【不会走到这里】—— 函数开头就有
+     *    `if (event) return { rate: ev.rate }` 的早退（见上），活动倍率由
+     *    activeEvent() 算好后原样透传。所以「活动时段切菩萨人格」在当前
+     *    架构下无法实现：活动分支把 Jev 整个绕过去了。
+     *    早先我为此另建 jev_act_* 四个 setting 试图绕过，结果与 events_json
+     *    构成两套活动上限、谁生效说不清，且那个 roundsLeft 扣减机制还引入了
+     *    「一局扣两次」的真 bug。已全部删除。
      */
     const seated = ctx && Array.isArray(ctx.seated) ? ctx.seated.filter((p) => p && isFinite(p.thr)) : [];
     if (!seated.length) {
@@ -219,7 +227,7 @@ function decideRate(cfg, pot, pool, event, ctx) {
       return { rate: t ? round2(t.v) : clamp(min + Math.random() * 0.9), fast: false, mode: '7-fallback' };
     }
     const jev = require('./jev');
-    const pick = jev.pickBand(seated, ctx.lastBoom ?? null, ctx.act || null);
+    const pick = jev.pickBand(seated, ctx.lastBoom ?? null, null);
     return { rate: pick.rate, fast: false, mode: '7-jev', jev: { band: pick.band, source: pick.source, confidence: pick.confidence } };
   }
 

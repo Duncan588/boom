@@ -35,7 +35,8 @@ const state = {
   cacheRounds: 4,       // 强制每 N 局至少重问一次
   persona: 'standard',
   sampleRate: 100,      // 0-100，管理员可降采样省钱
-  act: { active: false, roundsLeft: 0, maxRate: 0, instantPct: 0 },
+  // ⚠️ 没有 act 字段：活动状态由调用方每次传入（见 normAct）
+  lastActivity: null,    // 仅供后台显示「上一次是否在活动时段」
   cache: new Map(),     // `${persona}|${bandSig}` -> { probs, confidence, round }
   roundNo: 0,
   usage: { calls: 0, fails: 0, inTok: 0, outTok: 0, reused: 0, lastLatency: 0, lastError: '' },
@@ -52,40 +53,32 @@ function configure(cfg) {
   state.cacheRounds = Math.max(1, Number(cfg.jev_cache_rounds) || 4);
   state.persona = (cfg.jev_persona === 'bodhisattva') ? 'bodhisattva' : 'standard';
   state.sampleRate = Math.max(0, Math.min(100, Number(cfg.jev_sample_rate ?? 100)));
-  state.act = {
-    active: String(cfg.jev_act_enabled ?? '0') === '1',
-    roundsLeft: Math.max(0, Number(cfg.jev_act_rounds) || 0),
-    maxRate: Math.max(0, Number(cfg.jev_act_max) || 0),
-    instantPct: Math.max(0, Math.min(100, Number(cfg.jev_act_instant) || 0)),
-  };
+  // ⚠️ 这里【没有】活动配置。活动参数由 decideRate 从 activeEvent() 拿到的
+  //    ev 事件传入（见 game-logic.js mode 7 分支）。
+  //    早先这里读 jev_act_enabled / jev_act_rounds / jev_act_max / jev_act_instant
+  //    四个 setting，结果与「每日高倍活动」那套 events_json 打架：
+  //    同一时刻两套活动上限，谁生效说不清。已删除，配置只留「每日高倍活动」一处。
 }
 
 /**
- * 活动段是否生效 —— **纯查询，不扣减**。
+ * 活动段状态 —— **由调用方传入，不存 state**。
  *
- * ⚠️ 这里必须是纯函数：pickBand() 和 prefetch() 都会调它，
- *    早先版本在这里 roundsLeft--，结果一局游戏把活动额度消耗两次，
- *    实测「设置 2 局活动」只生效 1 局就自动关闭。
- *    扣减只发生在 engine 起飞那一处（consumeActivity），一个局扣一次。
+ * ⚠️ 早先版本把活动做成 setting（jev_act_enabled / jev_act_rounds /
+ *    jev_act_max / jev_act_instant）+ state.act + consumeActivity() 扣减，
+ *    结果与「每日高倍活动（自动）」那套 events_json 打架 ——
+ *    同一时刻存在两套活动上限，谁生效说不清；而且 roundsLeft 那个扣减机制
+ *    还引入了「一局扣两次」的真 bug。
+ *
+ * 现在活动只有一个来源：decideRate 拿到的 ev 事件（见 game-logic.js mode 7）。
+ * 活动时段本身由 daily-activity.js 调度，Jev 只在那一小时里切菩萨 + 限倍率。
  */
-function activity() {
-  const a = state.act;
-  return {
-    active: a.active && a.roundsLeft > 0,
-    roundsLeft: Math.max(0, a.roundsLeft),
-    maxRate: a.maxRate,
-    instantPct: a.instantPct,
-  };
-}
 
-/** 起飞时扣减活动局数。一个局扣一次，扣完自动关闭。 */
-function consumeActivity() {
-  const a = state.act;
-  if (!a.active || a.roundsLeft <= 0) return { active: false, roundsLeft: 0, maxRate: a.maxRate, instantPct: a.instantPct };
-  a.roundsLeft -= 1;
-  const left = a.roundsLeft;
-  if (left <= 0) { a.active = false; }
-  return { active: left > 0, roundsLeft: Math.max(0, left), maxRate: a.maxRate, instantPct: a.instantPct };
+/** 归一化调用方传入的活动对象；没有活动就返回 null（不是 {active:false}） */
+function normAct(act) {
+  if (!act || act.active !== true) return null;
+  const maxRate = Number(act.maxRate) || 0;
+  if (maxRate <= 0) return null;
+  return { active: true, roundsLeft: 0, maxRate, instantPct: Number(act.instantPct) || 0 };
 }
 
 /**
@@ -120,7 +113,7 @@ function buildState(seated, lastBoom, bands, act) {
     room: { seated: seated.length, median_escape_target: `${p50.toFixed(1)}x`, groups },
   };
   // 活动段只【告知】，不授权 —— 真正的钳制在 buildBands() 里由代码执行。
-  if (act && act.active) {
+  if (act) {
     s.active_campaign = {
       rounds_remaining: act.roundsLeft,
       max_multiplier_allowed: `${act.maxRate}x`,
@@ -128,53 +121,6 @@ function buildState(seated, lastBoom, bands, act) {
     };
   }
   return s;
-}
-
-/**
- * 活动段秒爆配额调度器。
- *
- * ⚠️ 秒爆比例【不能交给 Jev】——它只返回段权重，无法保证「100 局里恰好 15 局瞬爆」。
- *   早先版本只把 instantPct 写进 state 的 note 里让 Jev「注意」，
- *   实测配 30% 实际只有 2-4%：Jev 字面理解了「这一段要有人亏」，但它不数局。
- *
- * 所以改成确定性配额：活动段一共 actRounds 局，按 instantPct 决定其中
- * 恰好多少局必须是瞬爆，用「每几局一次」均匀铺开。
- * 这样配 30% / 5 局 = 恰好 1.5 局 → 交错成 2 局；配 15% / 100 局 = 15 局。
- * 额度用满后自动关掉强制，剩下的局交给 Jev 自由判断（若 Jev 自己选 instant 也算入）。
- */
-const actPlan = { key: '', quota: 0, done: 0, everyN: 0, remaining: 0 };
-
-/**
- * 规划活动段：算出这一段里有多少局必须是瞬爆、怎么铺开。
- * @returns {number} 每几局强制一次（0 = 本段无强制秒爆）
- */
-function planActivity(act) {
-  const total = state.act.roundsLeft;         // 本段还剩多少局
-  const pct = act.instantPct || 0;
-  const quota = Math.round(total * pct / 100);
-  const key = `${state.persona}|${total}|${pct}|${act.maxRate}`;
-  if (actPlan.key !== key) {
-    actPlan.key = key;
-    actPlan.quota = quota;
-    actPlan.done = 0;
-    // everyN = 每几局出现一次。quota=0 → 0（不强制）
-    actPlan.everyN = quota > 0 ? Math.max(1, Math.round(total / quota)) : 0;
-  }
-  actPlan.remaining = quota - actPlan.done;
-  return actPlan.everyN;
-}
-
-/**
- * 本局是否必须秒爆。配额铺开，不改随机性 —— 只在配额轮次强制 instant。
- */
-function mustInstant() {
-  const everyN = actPlan.everyN;
-  if (!everyN || actPlan.done >= actPlan.quota) return false;
-  // 用局号取模而不是计数器，这样即使某一局走了 fallback 也不会错位
-  const phase = state.roundNo % everyN;
-  if (phase !== 0) return false;
-  actPlan.done++;
-  return true;
 }
 
 function cacheKey(personaKey, bands) {
@@ -209,28 +155,24 @@ function sampleFromProbs(probs) {
  * @returns {{band, bands, persona, source, confidence, probs}}
  */
 function pickBand(seated, lastBoom, actCfg) {
-  const act = activity();   // 纯查询：不扣局数，扣减在 engine 起飞时
+  const act = normAct(actCfg);   // 活动状态由调用方传入（每日高倍活动那一小时）
   // 【硬约束 2】没人 → 不调用 API。空房间也走 decideRate，
   // 在这里拉 Jev 会让一个没人玩的服持续烧钱。
   if (!state.enabled || !state.apiKey || !seated || !seated.length) {
-    const persona = act.active ? 'bodhisattva' : state.persona;
+    const persona = (act && act.active) ? 'bodhisattva' : state.persona;
     const bands = buildBands(seated.length ? seated.map((p) => p.thr) : [2], act, PERSONA_EDGE_SCALE[persona] || 1);
-    if (act.active) planActivity(act);
-    const forced = act.active && seated.length && mustInstant();
-    const band = seated.length ? (forced ? 'instant' : fallbackBand(seated, persona)) : 'low';
+    const band = seated.length ? fallbackBand(seated, persona) : 'low';
     const rate = rateInBand(bands, band) ?? 2;
     return { band, bands, rate, persona, source: 'fallback', confidence: null, probs: null };
   }
 
-  const persona = act.active ? 'bodhisattva' : state.persona;
+  const persona = (act && act.active) ? 'bodhisattva' : state.persona;
   const bands = buildBands(seated.map((p) => p.thr), act, PERSONA_EDGE_SCALE[persona] || 1);
   const key = cacheKey(persona, bands);
   const hit = state.cache.get(key);
-  if (act.active) planActivity(act);
 
   if (hit && state.roundNo - hit.round < state.cacheRounds && fpMatch(hit.room, buildState(seated, lastBoom, bands, act).room)) {
-    const forced = act.active && mustInstant();
-    const band = forced ? 'instant' : (sampleFromProbs(hit.probs) || 'low');
+    const band = sampleFromProbs(hit.probs) || 'low';
     state.usage.reused++;
     state.lastSource = 'cache';
     state.lastProbs = hit.probs;
@@ -241,12 +183,6 @@ function pickBand(seated, lastBoom, actCfg) {
   }
 
   // 未命中：这一局先降级，下一局预热后就能命中
-  // ⚠️ 强制秒爆已在上方 mustInstant() 消费过，这里不能再调一次 ——
-  //    否则一个局扣两次配额，配 30% 会变成 60%。
-  if (act.active && mustInstant()) {
-    const r = rateInBand(bands, 'instant');
-    if (r != null) { state.lastSource = 'fallback'; return { band: 'instant', bands, rate: r, persona, source: 'fallback', confidence: null, probs: null }; }
-  }
   return fallback(seated, bands, persona);
 }
 
@@ -263,12 +199,12 @@ function fallback(seated, bands, persona) {
  * 内部三重保护：sampleRate / 空房间 / 超时 abort，且永不 reject。
  */
 async function prefetch(seated, lastBoom, actCfg) {
-  const act = activity();   // 纯查询：同上
+  const act = normAct(actCfg);
   if (!state.enabled || !state.apiKey || !seated || !seated.length) return;
   if (state.sampleRate <= 0) return;
   if (Math.random() * 100 >= state.sampleRate) return;
 
-  const persona = act.active ? 'bodhisattva' : state.persona;
+  const persona = (act && act.active) ? 'bodhisattva' : state.persona;
   const bands = buildBands(seated.map((p) => p.thr), act, PERSONA_EDGE_SCALE[persona] || 1);
   const key = cacheKey(persona, bands);
   const payload = buildState(seated, lastBoom, bands, act);
@@ -312,7 +248,7 @@ function status() {
     timeoutMs: state.timeoutMs,
     cacheRounds: state.cacheRounds,
     cacheSize: state.cache.size,
-    activity: { ...state.act },
+    activity: { source: 'events_json（每日高倍活动）', note: '活动参数不再单独配置' },
     usage: {
       ...u,
       perCallTokens: perCall,
@@ -354,4 +290,4 @@ function preview(roundCount, seatedSample) {
   };
 }
 
-module.exports = { configure, pickBand, prefetch, consumeActivity, tickRound, status, preview, buildBands, buildState, activity, state };
+module.exports = { configure, pickBand, prefetch, tickRound, status, preview, buildBands, buildState, normAct, state };

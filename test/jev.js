@@ -178,93 +178,75 @@ t('活动段压过上限后 key 必然不同', () => {
   );
 });
 
-console.log('\n[5] 活动段');
-t('活动段倍率不超上限', () => {
-  const act = { active: true, maxRate: 20 };
+console.log('\n[5] 活动时段（由「每日高倍活动」的 ev 事件驱动，不另建配置）');
+t('活动时段倍率不超上限', () => {
+  const act = { active: true, roundsLeft: 0, maxRate: 20, instantPct: 0 };
   const bands = buildBands(ROOM.map((p) => p.thr), act, 1);
   for (const b of bands) {
     assert.ok(b.max <= 20.001, `${b.label} 上界 ${b.max} 突破上限 20`);
   }
 });
-t('活动段秒爆比例生效（确定性配额）', () => {
-  // ⚠️ 这条测的是「配额调度器」，不是权重表。
-  //    早先版本只把 instantPct 写进 state 的 note 让 Jev「注意」，
-  //    配 30% 实际只有 2-4% —— Jev 返回的是段权重，它不数局。
-  jev.configure({
-    jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard',
-    jev_act_enabled: '1', jev_act_rounds: '100', jev_act_max: '25', jev_act_instant: '20',
-  });
-  let inst = 0;
-  const N = 100;
-  for (let i = 1; i <= N; i++) {
-    jev.tickRound(i);
-    const r = jev.pickBand(ROOM, 3, null);
-    if (r.band === 'instant') inst++;
-    jev.consumeActivity();
-  }
-  // 100 局 × 20% = 20 局【强制】秒爆。
-  // ⚠️ 实际可能 > 20：配额只保证「至少」这么多局，Jev 自己的 instant 权重
-  //    也会偶尔额外选 instant（实测 24）。所以这里断言下界 + 一个宽松上界，
-  //    断言等于 20 反而是把「Jev 不能自己选瞬爆」当成了需求。
-  assert.ok(inst >= 20, `配 20% 只有 ${inst}/100 局秒爆（强制配额没铺开）`);
-  assert.ok(inst <= 30, `配 20% 出现 ${inst}/100 局秒爆（远超预期，配额或权重有 bug）`);
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '0', jev_act_rounds: '0', jev_act_max: '0', jev_act_instant: '0' });
+t('normAct 归一化：无活动/无上限 → null', () => {
+  assert.strictEqual(jev.normAct(null), null);
+  assert.strictEqual(jev.normAct(undefined), null);
+  assert.strictEqual(jev.normAct({ active: false, maxRate: 20 }), null);
+  assert.strictEqual(jev.normAct({ active: true, maxRate: 0 }), null, '上限 0 应视为无活动');
+  const a = jev.normAct({ active: true, maxRate: 25 });
+  assert.ok(a && a.maxRate === 25, '合法活动未被归一化');
 });
-t('秒爆 0% 时不强制', () => {
-  jev.configure({
-    jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard',
-    jev_act_enabled: '1', jev_act_rounds: '50', jev_act_max: '25', jev_act_instant: '0',
-  });
-  let inst = 0;
-  for (let i = 1; i <= 50; i++) {
-    jev.tickRound(i);
-    if (jev.pickBand(ROOM, 3, null).band === 'instant') inst++;
-    jev.consumeActivity();
-  }
-  assert.ok(inst <= 3, `配 0% 却有 ${inst}/50 局秒爆（应接近 0）`);
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '0', jev_act_rounds: '0', jev_act_max: '0', jev_act_instant: '0' });
+t('活动时段人格被强制为菩萨（不靠 setting）', () => {
+  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_cache_rounds: '9' });
+  jev.tickRound(1);
+  const p1 = jev.pickBand(ROOM, 3, { active: true, maxRate: 20 });
+  assert.strictEqual(p1.persona, 'bodhisattva', '活动时段未切菩萨，实际 ' + p1.persona);
+  const p2 = jev.pickBand(ROOM, 3, null);
+  assert.strictEqual(p2.persona, 'standard', '非活动时段应为标准人格');
 });
-t('一个局的配额不被消费两次', () => {
-  jev.configure({
-    jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard',
-    jev_act_enabled: '1', jev_act_rounds: '10', jev_act_max: '25', jev_act_instant: '50',
-  });
-  let inst = 0;
-  for (let i = 1; i <= 10; i++) {
-    jev.tickRound(i);
-    if (jev.pickBand(ROOM, 3, null).band === 'instant') inst++;
-    jev.consumeActivity();
-  }
-  // 10 局 × 50% = 5 局【强制】秒爆。
-  // ⚠️ 同样可能 > 5：Jev 自己的 instant 权重会额外贡献。
-  //    若配额被重复消费，配 50% 会飙到 10 局（每局都命中），
-  //    所以上界取 7 —— 能区分「多消费一次」和「Jev 额外选」。
-  assert.ok(inst >= 5, `配 50%/10局 只有 ${inst} 局秒爆（配额没铺开）`);
-  assert.ok(inst <= 7, `配 50%/10局 出现 ${inst} 局秒爆（配额被重复消费）`);
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '0', jev_act_rounds: '0', jev_act_max: '0', jev_act_instant: '0' });
-});
-t('活动段生效时人格被强制为菩萨', () => {
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '1', jev_act_rounds: '5', jev_act_max: '20' });
+t('没有独立的活动 setting（configure 不再读 jev_act_*）', () => {
+  // 传了 jev_act_* 但没传 act → 必须完全无效
+  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard',
+    jev_act_enabled: '1', jev_act_rounds: '50', jev_act_max: '99', jev_act_instant: '30' });
   jev.tickRound(1);
   const r = jev.pickBand(ROOM, 3, null);
-  assert.strictEqual(r.persona, 'bodhisattva', '活动段未切菩萨，实际 ' + r.persona);
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '0', jev_act_rounds: '0', jev_act_max: '0' });
+  assert.strictEqual(r.persona, 'standard', 'jev_act_* 又生效了（与 events_json 打架）');
+  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard' });
 });
-t('活动段用尽后自动关闭', () => {
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '1', jev_act_rounds: '2', jev_act_max: '20' });
-  // 一个局扣一次（engine 起飞时），pickBand 本身只查询
-  const p1 = jev.pickBand(ROOM, 3, null); assert.strictEqual(p1.persona, 'bodhisattva', '第 1 局应生效');
-  jev.consumeActivity();
-  const p2 = jev.pickBand(ROOM, 3, null); assert.strictEqual(p2.persona, 'bodhisattva', '第 2 局应生效');
-  jev.consumeActivity();
-  const p3 = jev.pickBand(ROOM, 3, null); assert.strictEqual(p3.persona, 'standard', '第 3 局应已关闭，实际 ' + p3.persona);
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '0', jev_act_rounds: '0', jev_act_max: '0' });
+t('活动时段倍率不突破上限（端到端 400 局）', () => {
+  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_cache_rounds: '9' });
+  let over = 0;
+  for (let i = 1; i <= 400; i++) {
+    jev.tickRound(i);
+    const r = jev.pickBand(ROOM, 3, { active: true, maxRate: 20 });
+    if (r.rate > 20.001) over++;
+  }
+  assert.strictEqual(over, 0, over + '/400 局突破了活动上限 20x');
 });
-t('一次 consume 只扣一局（回归：早先一局扣两次）', () => {
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '1', jev_act_rounds: '5', jev_act_max: '20' });
-  jev.consumeActivity();
-  assert.strictEqual(jev.activity().roundsLeft, 4, '扣了不止一局');
-  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard', jev_act_enabled: '0', jev_act_rounds: '0', jev_act_max: '0' });
+t('活动时段由 ev 决定倍率，不经过 Jev（原有行为）', () => {
+  /**
+   * ⚠️ 这条断言的是【事实】，不是我的设计意图 —— 查清后才知道：
+   *   decideRate 在 mode 分支【之前】就有 `if (event) return { rate: ev.rate }`，
+   *   所以命中活动时永远不会走到 mode 7，倍率完全由 activeEvent() 算好的
+   *   ev.rate 决定。「活动段切菩萨人格」在当前架构下【无法实现】——
+   *   不是漏写，是活动分支把 Jev 整个绕过去了。
+   *
+   *   保留这条测试是为了：若将来有人把活动早退挪到 mode 之后，
+   *   这里会立刻失败并说明为什么（活动倍率必须原样透传，不能被 Jev 重选）。
+   */
+  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard' });
+  const cfg = { odds_mode: '7', min_rate: '1.20', max_rate: '50' };
+  const ev = { name: '高倍狂欢', min: 20, max: 1000, rate: 88 };
+  const d = decideRate(cfg, 5000, 1000, ev, { seated: ROOM, lastBoom: 3 });
+  assert.strictEqual(d.mode, 'event:高倍狂欢', '活动未走活动分支，实际 ' + d.mode);
+  assert.strictEqual(d.rate, 88, '活动倍率被改写为 ' + d.rate);
+  assert.ok(!d.jev, '活动分支不该带 jev 字段');
+});
+t('非活动时段 mode 7 正常工作', () => {
+  jev.configure({ jev_enabled: '1', jev_api_key: 'k', jev_persona: 'standard' });
+  const cfg = { odds_mode: '7', min_rate: '1.20', max_rate: '50' };
+  const d = decideRate(cfg, 5000, 1000, null, { seated: ROOM, lastBoom: 3 });
+  assert.strictEqual(d.mode, '7-jev');
+  assert.ok(d.rate > 1 && isFinite(d.rate), '倍率异常 ' + d.rate);
+  assert.ok(d.jev.band, '缺少段信息');
 });
 
 console.log('\n[6] 分段与降级分布');

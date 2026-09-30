@@ -442,11 +442,10 @@ const DEFAULT_SETTINGS = {
   jev_sample_rate: '100',   // 0-100，调用采样率；降到 20 即只五分之一的局问 Jev
   jev_cache_rounds: '4',    // 分布复用窗口：每 N 局至少重问一次
   jev_timeout_ms: '800',    // 单次调用超时，超时即降级，绝不阻塞起飞
-  // 活动段：一键切换到菩萨人格 + 限制倍率上限 + 指定秒爆比例
-  jev_act_enabled: '0',
-  jev_act_rounds: '0',      // 生效局数，0 = 不启用
-  jev_act_max: '0',         // 活动段最高倍率，0 = 不限制
-  jev_act_instant: '0',     // 活动段内秒爆百分比 0-100
+  // ⚠️ 没有 jev_act_* 设置。
+  //    活动时段与倍率带由「每日高倍活动（自动）」的 events_json 决定，
+  //    Jev 在活动那一小时自动切菩萨人格 + 受该倍率带约束。
+  //    早先这里另建一套活动配置，与 events_json 构成两套活动上限，已删除。
 };
 
 function seedSettings() {

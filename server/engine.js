@@ -261,11 +261,6 @@ class Engine {
         jev.prefetch(seated, dec.rate, null).catch(() => {});
       } catch (_) { /* Jev 是可选增强，失败不影响本局 */ }
     }
-    /**
-     * 【活动段扣减】一个局扣一次，必须在起飞这一处 —— pickBand 和 prefetch 都只是查询。
-     * 早先在 activity() 里扣，导致一局扣两次，「设 2 局」只生效 1 局。
-     */
-    if (mode7) jev.consumeActivity();
     const rate = dec.rate;
     // 飞行时长上限：原版靠资金池约束不会出现极端值，但我们允许后台把 max_rate 调到
     // 1000，flightMs(1000) = 700 秒，会把整个引擎 sleep 住（单进程引擎，12 分钟卡死）。

@@ -55,7 +55,7 @@ function buildBands(thresholds, act, edgeScale = 1) {
    *   按比例缩进才能保住每段的相对宽度。
    */
   let top = natural;
-  if (act && act.active && act.maxRate > 0 && natural > act.maxRate) {
+  if (act && act.maxRate > 0 && natural > act.maxRate) {
     top = round2(p80 + (natural - p80) * Math.max(0.05, (act.maxRate - p80) / (natural - p80)));
   }
 

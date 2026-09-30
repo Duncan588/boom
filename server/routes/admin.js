@@ -495,10 +495,6 @@ function register(router) {
         sampleRate: Number(s.jev_sample_rate ?? 100),
         cacheRounds: Number(s.jev_cache_rounds ?? 4),
         timeoutMs: Number(s.jev_timeout_ms ?? 800),
-        actEnabled: String(s.jev_act_enabled ?? '0') === '1',
-        actRounds: Number(s.jev_act_rounds ?? 0),
-        actMax: Number(s.jev_act_max ?? 0),
-        actInstant: Number(s.jev_act_instant ?? 0),
         hasKeyInSettings: !!key,
         hasEnvKey: !!process.env.TYPESAFE_API_KEY,
       },
@@ -525,10 +521,10 @@ function register(router) {
     // key 传空字符串 = 保持原值不变（前端不回显明文，只能「改」不能「看」）
     if (typeof b.apiKey === 'string' && b.apiKey.trim()) put('jev_api_key', b.apiKey.trim());
 
-    put('jev_act_enabled', b.actEnabled ? '1' : '0');
-    put('jev_act_rounds', num(b.actRounds, 0, 0, 100000));
-    put('jev_act_max', num(b.actMax, 0, 0, 100000));
-    put('jev_act_instant', num(b.actInstant, 0, 0, 100));
+    // ⚠️ 这里【不写】任何活动参数。活动时段与倍率带由「每日高倍活动（自动）」
+    //    那一节的 events_json 决定 —— Jev 在那一个小时里自动切菩萨 + 限倍率。
+    //    早先这里写 jev_act_enabled / jev_act_rounds / jev_act_max / jev_act_instant
+    //    四个 setting，与 events_json 构成两套活动上限，谁生效说不清。已删除。
 
     // 立刻生效：下一局就按新配置走，不需重启
     jev.configure(db.allSettings());
@@ -540,22 +536,6 @@ function register(router) {
       preview: jev.preview(Number(b.previewRounds) || 300),
       status: jev.status(),
     });
-  });
-
-  /** 一键开启活动段：切菩萨人格 + 限倍率 + 定秒爆比例 */
-  router.post('/admin/api/jev/activity', async (req, res) => {
-    if (!requireAdmin(req, res)) return;
-    const b = await readBody(req);
-    const n = (v, d, lo, hi) => {
-      const x = Number(v);
-      return isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d;
-    };
-    db.setSetting('jev_act_enabled', b.enabled === false ? '0' : '1');
-    db.setSetting('jev_act_rounds', String(n(b.rounds, 100, 0, 100000)));
-    db.setSetting('jev_act_max', String(n(b.maxRate, 25, 0, 100000)));
-    db.setSetting('jev_act_instant', String(n(b.instantPct, 15, 0, 100)));
-    jev.configure(db.allSettings());
-    json(res, 200, { ok: true, status: jev.status() });
   });
 
   /** 纯代码分布预览。⚠️ 绝不调用 Jev —— 管理员点一次预览不该烧一次钱。 */

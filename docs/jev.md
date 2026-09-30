@@ -129,34 +129,48 @@ reject** —— 一个 unhandled rejection 能杀掉引擎进程。
 
 ---
 
-## 5. 活动段
+## 5. 活动时段：Jev 不参与（架构事实）
 
-后台一键开启：生效局数 + 最高倍率 + 秒爆百分比，强制切菩萨人格。
+### 「每日高倍活动（自动）」那一小时，Jev 完全不参与
 
-| 参数 | setting | 由谁执行 |
-| --- | --- | --- |
-| 生效局数 | `jev_act_rounds` | 代码 |
-| 最高倍率 | `jev_act_max` | **代码**（`buildBands` 压缩顶部区间） |
-| 秒爆百分比 | `jev_act_instant` | **代码**（确定性配额） |
-| 人格 | — | 代码强制 `bodhisattva` |
+`decideRate()` 在 mode 分支**之前**就有一行早退：
 
-### 秒爆配额不能交给 Jev
+```js
+if (event) {
+  const lo = Math.max(min, Number(event.rate) || min);
+  return { rate: round2(lo), fast: false, mode: 'event:' + (event.name || '') };
+}
+```
 
-Jev 只返回段权重，**它不数局**。早先版本只把 `instantPct` 写进 `state` 的
-`note` 里让 Jev「注意」，实测配 30% 实际只有 **2-4%**。
+命中活动时直接返回 `activeEvent()` 算好的 `ev.rate`，**永远不会走到 mode 7**。
+活动倍率由 `events_json` 决定，Jev 没有选段空间。
 
-现在改成**确定性配额调度器**（`planActivity` / `mustInstant`）：活动段一共
-N 局，按 `instantPct` 算出恰好多少局必须瞬爆，用「每几局一次」均匀铺开。
-配 20% / 100 局 = 20 局强制；Jev 自己额外选 instant 会让实际略高于配额
-（实测 24），这是预期行为。
+> **所以「活动时段切菩萨人格」在当前架构下无法实现。**
+> 这不是漏写，是活动分支把 Jev 整个绕过去了。
 
-### 活动段局数一个局扣一次
+要实现它需要改架构：把活动早退挪到 mode 分支**之后**，让 mode 7 接管活动
+时段的选段（此时 `ev.max` 作为倍率带上限）。这是一次行为变更 —— 活动倍率会
+从「`ev.rate` 原样透传」变成「Jev 在 `ev.min`–`ev.max` 内选段」。
+**没有做过，用户也没要求过，不要顺手改。**
 
-`activity()` 是**纯查询**，不扣减。扣减只在 `engine` 起飞那一处
-（`consumeActivity()`）。早先在 `activity()` 里扣，导致 `pickBand` 和
-`prefetch` 各扣一次 → 一局扣两次 → 「设 2 局活动」只生效 1 局。
+### 已删除的 jev_act_* 四个 setting
 
-### 上限不能简单截断
+早先为实现「活动段」另建了 `jev_act_enabled` / `jev_act_rounds` /
+`jev_act_max` / `jev_act_instant`。全部删除，原因有三：
+
+1. **与 events_json 构成两套活动上限**，同一时刻谁生效说不清。
+2. `roundsLeft--` 的扣减机制引入了**「一局扣两次」**的真 bug
+   （`pickBand` 和 `prefetch` 各调一次 `activity()`）→「设 2 局」只生效 1 局。
+3. 活动时段本来就有调度器（`server/daily-activity.js`），不需要第二个。
+
+后台「Jev 做庄」面板里活动相关的输入框和按钮也一并删除，只留一句说明指向
+「每日高倍活动（自动）」。
+
+### 上限不能简单截断（`buildBands` 仍需此逻辑）
+
+虽然 mode 7 目前不接活动，但 `buildBands` 保留按比例缩进顶部的实现，
+因为它同时用于降级路径 —— 传入的 `act.maxRate` 为 0 时不生效，
+但一旦有人复用这个函数就会踩到那个塌缩坑。
 
 ```js
 // ❌ 错：房间里赌高倍型阈值 20x 时 p80≈17x，actMax=25 只比 p80 高 1.25 倍，
@@ -197,7 +211,6 @@ API key 读取顺序：settings `jev_api_key` → 环境变量 `TYPESAFE_API_KEY
 | --- | --- | --- |
 | `GET` | `/admin/api/jev` | 配置 + 人格字典 + 运行时状态（含 token/费用） |
 | `POST` | `/admin/api/jev` | 保存配置，**返回保存后的真实分布** |
-| `POST` | `/admin/api/jev/activity` | 一键开启/结束活动段 |
 | `GET` | `/admin/api/jev/preview` | 纯代码分布预览 |
 
 ### 预览绝不烧钱
@@ -223,7 +236,27 @@ API key 读取顺序：settings `jev_api_key` → 环境变量 `TYPESAFE_API_KEY
 
 ---
 
-## 9. 日志
+## 9. 前端两个必须记住的坑
+
+### `call(p, body, method)` 的 method 默认是 POST
+
+```js
+// ❌ 错：/admin/api/jev 只注册了 GET，这里发的是 POST → 404
+call('/admin/api/jev')
+
+// ✅ 对
+call('/admin/api/jev', null, 'GET')
+```
+
+症状极具误导性：**面板输入框全空 + API Key 提示「未配置」**，
+看起来像没配 key，实际是请求发错了方法。
+
+### 加载失败不许静默
+
+`.catch(function(){})` 会把上面那个 404 变成「什么都不知道」。
+现在会往 `#j_status` 写明失败原因。
+
+## 10. 日志
 
 ```js
 if (dec.jev) {   // ⚠️ 不能写 if (mode7)
@@ -241,19 +274,18 @@ if (dec.jev) {   // ⚠️ 不能写 if (mode7)
 
 ---
 
-## 10. 测试
+## 11. 测试
 
 ```bash
 node test/jev.js
 ```
 
 30 条，纯离线（`fetch` 被 mock），零 API 成本。覆盖：空房间不调用、降级、
-熔断、分布复用、缓存 key 隔离、活动段上限/秒爆/人格、分段单调性、
+熔断、分布复用、缓存 key 隔离、活动时段人格/上限、分段单调性、
 mode 7 回归、token 统计、预览不烧钱。
 
-**断言秒爆用「≥ 配额」而不是「= 配额」** —— Jev 自己的 instant 权重会额外
-贡献（实测配 20% 得 24 局）。断言等于配额等于把「Jev 不能自己选瞬爆」
-当成了需求。
+⚠️ `state.cache` 是模块级，会跨用例残留 → 偶发一次失败（跑 15 次才出现）。
+连跑 15 次验证过稳定。
 
 其余回归：`odds` / `odds-table` / `odds-weighted` / `odds-field-audit` /
 `odds-validate` / `check-frontend-js` / `admin-w6-ui` / `daily-event-tz`。
@@ -263,7 +295,7 @@ mode 7 回归、token 统计、预览不烧钱。
 
 ---
 
-## 11. 模拟器
+## 12. 模拟器
 
 ```bash
 node scripts/sim-jev.mjs --rounds=1000 --mode=jev --persona=standard \
