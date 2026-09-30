@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>爆点逃跑</title>
-<link rel="stylesheet" href="/css/base.css?v=29">
-<link rel="stylesheet" href="/css/game.css?v=29">
+<link rel="stylesheet" href="/css/base.css?v=31">
+<link rel="stylesheet" href="/css/game.css?v=31">
 <link rel="icon" href="/assets/qun.png">
 </head>
 <body>
@@ -86,26 +86,23 @@
 
       <div class="phase" id="phase">连接中…</div>
 
+      <!--
+        【2026-09-30 第二版】只留「图标 + 金额输入 + 梭哈」。
+        第一版我加了 最小/一半/最大 三个快捷键 —— 「一半」是用户没要求的，
+        三个按钮把整行塞满反而挤掉了真正需要的输入区。已全部去掉。
+
+        金额不再套外框：那个 .stepper 的 surface 底 + 描边把输入框
+        变成了一个「按钮」的样子，看着像不能点。改成无框输入，
+        靠字号和 QUN 图标表达这是金额，直接点就能改。
+        梭哈 = 全部余额，无上限（超过 10 万在按钮上以 M 显示）。
+      -->
       <div class="betbar">
-        <!--
-          【2026-09-30】去掉 +/− 步进器。
-          原来只有 − 和 + 两个固定步进，作用有限却占了最显眼的位置；
-          改成「快捷金额 + 梭哈」，把空间给真正有用的操作。
-          金额仍可直接点输入框手改。
-        -->
-        <div class="bet-quick" id="betQuick">
-          <button class="btn btn-sm" id="btnMin">最小</button>
-          <button class="btn btn-sm" id="btnHalf">一半</button>
-          <button class="btn btn-sm" id="btnMax">最大</button>
-          <button class="btn btn-sm btn-allin" id="btnAllIn">梭哈</button>
+        <div class="bet-amt">
+          <img class="qun-ic" src="/assets/qun.png" alt="">
+          <input id="betAmt" class="bet-input" type="text" inputmode="numeric"
+                 autocomplete="off" aria-label="下注金额" value="10">
         </div>
-        <div class="stepper">
-          <div class="val">
-            <img class="qun-ic" src="/assets/qun.png" alt="">
-            <input id="betAmt" class="bet-input" type="text" inputmode="numeric"
-                   autocomplete="off" aria-label="下注金额" value="10">
-          </div>
-        </div>
+        <button class="btn btn-allin" id="btnAllIn">梭哈</button>
       </div>
 
       <button class="btn btn-lg act-btn bet" id="actBtn" disabled>连接中…</button>
@@ -159,7 +156,7 @@
   </div>
 </div>
 
-<script src="/js/chart.js?v=29"></script>
-<script src="/js/app.js?v=29"></script>
+<script src="/js/chart.js?v=31"></script>
+<script src="/js/app.js?v=31"></script>
 </body>
 </html>

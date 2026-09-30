@@ -1149,27 +1149,38 @@
   // 失焦时把规范化后的值写回（清掉多余前导零等）
   $('#betAmt').addEventListener('blur', function (e) { setBet(S.bet); });
   /**
-   * 【2026-09-30】去掉 +/− 步进，改为「最小 / 一半 / 最大 / 梭哈」。
+   * 【2026-09-30 第二版】下注区只留「图标 + 金额输入 + 梭哈」。
    *
-   * 原来的 minus/plus 是固定步进（<10 减 1，>100 加 10），
-   * 想要 37 或 250 只能手输 —— 存在感不强的死控件。
+   * 第一版我加了 最小 / 一半 / 最大 三个快捷键，其中「一半」用户根本没要求，
+   * 三个按钮把整行塞满，反而把真正需要的输入区挤成一条缝。已全部删除。
    *
-   * ⚠️ 梭哈 = 全部余额，一键入框但【不自动提交】——
-   *    误触一次把全部身家压上去的代价太高，必须让用户自己再点一次下注。
-   *    剩余 0 时按钮禁用。
+   * 梭哈 = 【全部余额，无上限】。之前 Math.floor(S.me.coins) 就是全部，
+   * 问题只是它没有把大数字显示出来 —— 用户看到「梭哈」不知道会压多少。
+   * 所以按钮文字跟着余额走：≥10 万显示成 M（123.4M），否则显示原值。
+   *
+   * ⚠️ 梭哈只填金额不自动提交 —— 误触一次把全部身家压上去代价太高，
+   *    必须让用户自己再点一次下注。
    */
-  $('#btnMin').onclick = function () { setBet(1); };
-  $('#btnHalf').onclick = function () {
-    if (S.me) setBet(Math.max(1, Math.floor(S.me.coins / 2)));
-  };
-  $('#btnMax').onclick = function () { if (S.me) setBet(Math.max(1, Math.floor(S.me.coins))); };
   $('#btnAllIn').onclick = function () {
-    if (S.me) setBet(Math.max(1, Math.floor(S.me.coins)));
+    if (!S.me) return;
+    setBet(Math.max(1, Math.floor(S.me.coins)));
   };
-  // 梭哈按钮随余额禁用：没钱时置灰，避免点了没反应
+  /**
+   * 梭哈按钮随余额刷新：文案跟着金额变（超 10 万用 M），余额 <1 时置灰。
+   * 挂在 renderMe() / setCoins() 上 —— 余额每次变化都会经过它们。
+   */
   function syncAllIn() {
     var b = $('#btnAllIn');
-    if (b) b.disabled = !(S.me && S.me.coins >= 1);
+    if (!b) return;
+    var c = (S.me && S.me.coins) || 0;
+    b.disabled = c < 1;
+    /**
+     * 用户要求：金额超过 10 万就用 M 表示。
+     * ⚠️ 10 万 = 0.10M —— 短但明确；再往上用 K 更符合习惯，
+     *    但用户说的是 M，所以保持 M。
+     */
+    b.textContent = c >= 100000 ? (c / 1000000).toFixed(2) + 'M 梭哈'
+                                 : '梭哈 ' + fmtC(c);
   }
   // 两个独立开关：🎵 背景音乐 / 🔊 音效（互不影响）
   // 用 localStorage 记住选择，刷新后不再被重置为默认开启

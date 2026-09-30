@@ -475,25 +475,42 @@
 .bets-empty { text-align: center; color: var(--fg-3); font-size: 13px; padding: 22px 0; }
 
 /* ---------- 下注区 ---------- */
-.betbar { display: flex; gap: 10px; align-items: stretch; margin-top: 10px;
-          position: relative; z-index: 1; flex-wrap: wrap; }
+.betbar { display: flex; gap: 10px; align-items: center; margin-top: 12px;
+          position: relative; z-index: 1; }
 /**
- * 【2026-09-30】快捷金额行：最小 / 一半 / 最大 / 梭哈。
- * 原来这一行是 .bet-actions（只有最小/最大）挤在 stepper 右边，
- * 现在独立成行放在上方，宽度铺满 —— 四个按钮等宽，触摸目标够大。
+ * 【2026-09-30 第二版】金额输入不再套框。
+ * 第一版沿用 .stepper 的 surface 底 + 描边，结果输入框看起来像按钮、
+ * 像不能点。这里去掉所有边框和背景，只靠字号 + QUN 图标表达「这是金额」，
+ * 靠 flex 撑满剩余宽度，触摸目标够大。
  */
-.bet-quick { display: flex; gap: 8px; width: 100%; }
-.bet-quick .btn { flex: 1; min-height: 38px; }
-/* 梭哈用警示色，和「最大」区分开：一个是梭哈，一个是留一点余地 */
-.bet-quick .btn-allin {
-  background: linear-gradient(135deg, rgba(255,107,74,.22), rgba(255,184,108,.18));
-  border-color: rgba(255,107,74,.5); color: #ffb86c; font-weight: 800;
+.bet-amt {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 0 4px; height: 52px;
 }
-.bet-quick .btn-allin:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(255,107,74,.34), rgba(255,184,108,.26));
-  border-color: rgba(255,107,74,.75);
+.bet-amt .qun-ic { width: 22px; height: 22px; flex: none; }
+.bet-amt .bet-input {
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  color: var(--fg); font-size: 30px; font-weight: 800; letter-spacing: .5px;
+  font-family: inherit; text-align: left; padding: 0;
 }
-.bet-quick .btn-allin:disabled { opacity: .38; cursor: not-allowed; }
+.bet-amt .bet-input::placeholder { color: var(--fg-3); }
+
+/**
+ * 梭哈：全部余额，无上限。
+ * 高度与金额区一致（52px），橙色警示 —— 和普通下注区分开，
+ * 避免误触。余额 <1 时置灰。
+ */
+.btn-allin {
+  flex: none; height: 52px; min-width: 96px; padding: 0 18px;
+  font-size: 17px; font-weight: 800; letter-spacing: 1px;
+  background: linear-gradient(135deg, rgba(255,107,74,.24), rgba(255,184,108,.20));
+  border: 1px solid rgba(255,107,74,.55); color: #ffb86c;
+}
+.btn-allin:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(255,107,74,.36), rgba(255,184,108,.28));
+  border-color: rgba(255,107,74,.8);
+}
+.btn-allin:disabled { opacity: .35; cursor: not-allowed; }
 
 .stepper {
   flex: 1; display: flex; align-items: center; justify-content: center;
