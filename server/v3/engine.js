@@ -267,7 +267,26 @@ const _rangeState = new Map();
 function rollRange(cfg) {
   const min = Math.max(1, Number(cfg.min) || 1);
   const max = Math.max(min + 0.5, Number(cfg.max) || 1000);
-  const key = min + ':' + max;
+  /**
+   * 【2026-09-30 修复：缓存 key 必须包含 boomRate】
+   *
+   * 实盘症状：活动开启后玩了 50 局，瞬爆 0 次；同一份代码单独调用引擎
+   * 瞬爆率 29.9%（完全正常）。
+   *
+   * 根因是缓存 key 只有 `min:max`。服务在 18:09 重启，那一刻
+   * events_json 里【还没有 boom_rate 字段】（18:28 才补上），
+   * 于是第一次调用 rollRange 时 boomQuota 取到默认 0，
+   * 并把一个「永不瞬爆」的实例按 key "1:1000" 存进缓存。
+   * 之后补上 boom_rate=0.3，key 没变 → 永远命中那个坏实例。
+   *
+   * 这类「配置热更新不生效」的 bug 极难从外部观察：引擎本身完全正常，
+   * 只是进程内记住了一个过期的实例。任何影响引擎行为的字段都必须进 key。
+   */
+  const width = cfg.width === undefined || cfg.width === '' ? 'd' : String(cfg.width);
+  const jump = cfg.jumpRate === undefined || cfg.jumpRate === '' ? 'd' : String(cfg.jumpRate);
+  const boomKey = cfg.boomRate === undefined || cfg.boomRate === '' ? '0' : String(cfg.boomRate);
+  // 每一项【影响引擎行为】的字段都必须进key —— 漏一个就是一次热更新失效。
+  const key = min + ':' + max + ':' + boomKey + ':' + width + ':' + jump;
   let eng = _rangeState.get(key);
   if (!eng) {
     eng = createEngine({

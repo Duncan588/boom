@@ -36,6 +36,40 @@ function run(label, cfg, n) {
   return { longest, empty };
 }
 
+/**
+ * 【回归】缓存 key 必须包含 boomRate。
+ *
+ * 实盘 bug：服务重启时 events_json 还没有 boom_rate → rollRange 用默认 0
+ * 缓存了一个「永不瞬爆」的实例；之后补上 boom_rate=0.3，但因为 key 只有
+ * min:max，永远命中那个坏实例 → 玩了 50 局瞬爆 0 次。
+ * 而同一份代码单独调用引擎瞬爆率 29.9%，完全正常 —— 从外部看不出问题。
+ */
+console.log('\n=== 回归：boomRate 热更新必须生效 ===');
+{
+  v3.resetRange();
+  // 第一次调用：模拟「服务启动时配置里没有 boom_rate」
+  let n1 = 0;
+  for (let i = 0; i < 1000; i++) if (v3.rollRange({ min: 1, max: 1000 }).boom) n1++;
+  // 第二次：配置补上 boom_rate=0.3，同一个 min:max
+  let n2 = 0;
+  for (let i = 0; i < 1000; i++) if (v3.rollRange({ min: 1, max: 1000, boomRate: 0.3 }).boom) n2++;
+  console.log('  启动时(无 boom_rate) 瞬爆 ' + (n1 / 10).toFixed(1) + '%   期望 0%');
+  console.log('  补上 boom_rate=0.3 瞬爆 ' + (n2 / 10).toFixed(1) + '%   期望 ≈30%');
+  console.log('  ' + (n1 === 0 ? '✅ OK  ' : '❌ FAIL') + ' 启动时确实不瞬爆');
+  console.log('  ' + (Math.abs(n2 / 1000 - 0.3) < 0.05 ? '✅ OK  ' : '❌ FAIL') + ' 热更新后瞬爆率恢复到 30%');
+}
+console.log('\n=== 回归：width / jumpRate 热更新也必须生效 ===');
+{
+  v3.resetRange();
+  const a = [];
+  for (let i = 0; i < 800; i++) a.push(v3.rollRange({ min: 1, max: 1000, width: 1.8 }).rate);
+  const b = [];
+  for (let i = 0; i < 800; i++) b.push(v3.rollRange({ min: 1, max: 1000, width: 1.8, jumpRate: 0.9 }).rate);
+  const mid = (x) => x.slice().sort((p, q) => p - q)[x.length >> 1];
+  console.log('  width=1.8 中位 ' + mid(a).toFixed(1) + 'x   width=1.8+jump=0.9 中位 ' + mid(b).toFixed(1) + 'x');
+  console.log('  ' + (mid(a) !== mid(b) ? '✅ OK  ' : '⚠️ 提示') + ' 两组独立采样（缓存已按字段隔离）');
+}
+
 console.log('='.repeat(56));
 console.log('修复前 vs 修复后（活动 1–1000x, 30% 瞬爆）');
 console.log('='.repeat(56));

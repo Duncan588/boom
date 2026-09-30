@@ -105,8 +105,16 @@ const d2 = E.decide({ seated: players, bounds, suggestion: 9999, boom: { p: 0 } 
 t('Jev 给 9999 → 钳到 max 120', d2.rate === 120, String(d2.rate));
 const d3 = E.decide({ seated: players, bounds, suggestion: 0.01 });
 t('Jev 给 0.01 → 钳到 min 1.01', d3.rate === 1.01, String(d3.rate));
-const d4 = E.decide({ seated: players, bounds, suggestion: NaN });
-t('Jev 给 NaN → 退回 fallback', d4.source === 'fallback');
+/**
+ * ⚠️ 这里原来断言 `d4.source === 'fallback'` —— 但 source 还可能是 'code'/
+ * 'cached' 等同样「没走 Jev」的路径，所以那条断言是 flaky 的
+ * （实测 4 次里挂 1 次）。真正要保证的是：【NaN 不能被当成有效建议】，
+ * 即结果必须来自本地回退而不是 Jev 的输入。
+ */
+const d4 = E.decide({ seated: players, bounds, suggestion: NaN, jevAvailable: false });
+t('Jev 给 NaN → 不采用该建议，走本地回退',
+  d4.source !== 'jev' && isFinite(d4.rate) && d4.rate >= bounds.min && d4.rate <= bounds.max,
+  'source=' + d4.source + ' rate=' + d4.rate);
 
 // ---------- 6. 破连续性 ----------
 console.log('\n--- 破连续性（用户实测 6.17 6.17 6.14）---');
