@@ -1424,7 +1424,15 @@ $('#btnSaveOdds').onclick=function(){
     var bad = w6Validate(rows);
     if (!bad.ok) { toast(bad.error, 'err'); return; }
   }
-  call('/admin/api/settings',{
+  /**
+   * ⚠️ mode 7 必须【不提交】odds_table_json。
+   * 原来这里无条件写 `odds_table_json: rows.length ? JSON.stringify(rows) : ''`，
+   * 而 rows 在 mode 7 下是 [] → 提交空串 → 把管理员那张百分比表清空。
+   * 后果：切回 mode 6 时表是空的，赔率全乱，且没有任何提示。
+   *
+   * mode 7 的配置由「保存 Jev 设置」那个按钮负责，两个按钮各管各的。
+   */
+  var body = {
     odds_mode:mode,
     min_rate:$('#s_min').value, max_rate:$('#s_max').value,
     w_low:$('#s_wlow').value, w_mid:$('#s_wmid').value, w_high:$('#s_whigh').value,
@@ -1432,9 +1440,11 @@ $('#btnSaveOdds').onclick=function(){
     w_mid_min:$('#s_wmidmin').value, w_mid_max:$('#s_wmidmax').value,
     w_high_min:$('#s_whimin').value, w_high_max:$('#s_whimax').value,
     w_top_min:$('#s_wtopmin').value, w_top_max:$('#s_wtopmax').value,
-    w_boom:$('#s_wboom').value, w_boom_max:$('#s_wboommax').value,
-    odds_table_json: rows.length ? JSON.stringify(rows) : ''
-  }).then(function(r){
+    w_boom:$('#s_wboom').value, w_boom_max:$('#s_wboommax').value
+  };
+  // 只在 mode 6 下提交分布表；其它模式一律不碰它
+  if (mode === '6') body.odds_table_json = JSON.stringify(rows);
+  call('/admin/api/settings', body).then(function(r){
     if(r.error){ toast(r.error,'err'); return; }
     /**
      * 【保存后必须告知是否生效】
@@ -1449,6 +1459,17 @@ $('#btnSaveOdds').onclick=function(){
      */
     call('/admin/api/odds-preview?rounds=10000', null, 'GET').then(function(p){
       if (p.error) { toast('已保存，但预览失败：' + p.error, 'err'); return; }
+      /**
+       * ⚠️ mode 7 不能用这个预览报告结果。
+       * /admin/api/odds-preview 跑的是 simulate()，而 simulate 不带 ctx，
+       * 所以 mode 7 在它眼里等于「表驱动 + jev 未启用」。
+       * 直接报它的数字 = 报了一个和实际行为无关的分布。
+       * mode 7 的真实分布由「保存 Jev 设置」返回的 jev.preview 给出。
+       */
+      if (mode === '7') {
+        toast('已生效（下一局开始）　Jev 设置请点「保存 Jev 设置」', 'ok');
+        return;
+      }
       var top = p.buckets.slice().sort(function(a,b){ return b.count - a.count; })[0];
       toast('已生效（下一局开始）　中位 ' + p.median + 'x　平均 ' + p.avg + 'x　瞬爆 ' + p.instantBoomPct + '%'
             + '　最多：' + top.label + ' ' + top.pct + '%', 'ok');

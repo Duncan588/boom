@@ -362,6 +362,36 @@ console.log('\n=== 12. 手填下界真的生效（2026-09-30 新需求）===');
   ok(win.w6Read()[1].min === 2, '改第 2 行下界后 w6Read() 读到 2');
 }
 
+console.log('\n=== 12b. mode 7 不得提交 odds_table_json（回归：曾清空管理员的表）===');
+/**
+ * ⚠️ 真实 bug：btnSaveOdds 原来无条件写
+ *    `odds_table_json: rows.length ? JSON.stringify(rows) : ''`，
+ *    而 rows 只在 mode 6 才填充，mode 7 下是 [] → 提交空串
+ *    → 把管理员那张 14/38/30/10/5/3 的百分比表清空，切回 mode 6 时赔率全乱。
+ *
+ * call() 的返回是 Promise.resolve()，then 回调在微任务里跑；
+ * 这里用同步的 call stub（直接赋值）避免依赖 await。
+ */
+{
+  win.eval('window.__capBody = null; function call(p,b,m){ window.__capBody = b; return { then: function(){ return this; }, catch: function(){ return this; } }; }');
+  const modeSel = doc.getElementById('s_mode');
+  modeSel.value = '7';
+  modeSel.dispatchEvent(new win.Event('change'));
+  doc.getElementById('btnSaveOdds').dispatchEvent(new win.Event('click'));
+  const body = win.__capBody;
+  ok(body, '点保存后应发出请求');
+  if (body) {
+    ok(!('odds_table_json' in body), 'mode 7 不得提交 odds_table_json —— 这会清空管理员的百分比表');
+    ok(body.odds_mode === '7', '应提交 odds_mode=7，实际 ' + body.odds_mode);
+  }
+  modeSel.value = '6';
+  doc.getElementById('btnSaveOdds').dispatchEvent(new win.Event('click'));
+  const body6 = win.__capBody;
+  ok(body6 && typeof body6.odds_table_json === 'string' && body6.odds_table_json.length > 2,
+     'mode 6 仍应提交 odds_table_json');
+  modeSel.value = '5';
+}
+
 console.log('\n=== 13. 合计不等于 100 时前端必须拦下 ===');
 {
   let cap = null;
