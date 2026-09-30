@@ -1122,8 +1122,28 @@
   }
 
   /* ---------------- 操作 ---------------- */
+  /**
+   * 【2026-09-30】下注金额上限：去掉 999999。
+   * 用户明确要求「梭哈 = 全部余额」，而全部余额可能远超 999999，
+   * 硬上限会让「梭哈」键填进去一个比余额小的数 —— 看起来是梭哈，其实不是。
+   * 这个数字出现过两轮都没改掉，是我的疏漏。
+   *
+   * 现在只保留下限 1：上限交给服务端 coins 校验（余额多少就是多少），
+   * 前端不再替服务端做决定。
+   */
+  var BET_MIN = 1;
+
+  /** 大数字缩写：用户要求 1000+ 用 K、百万后用 M、十亿后用 B */
+  function fmtShort(n) {
+    n = Number(n) || 0;
+    if (n >= 1e9) return (n / 1e9).toFixed(2).replace(/\.?0+$/, '') + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
+    return String(n);
+  }
+
   function setBet(v) {
-    S.bet = Math.max(1, Math.min(999999, Math.round(v)));
+    S.bet = Math.max(BET_MIN, Math.round(v));
     var inp = $('#betAmt');
     // 输入框正在被用户编辑时不要回写，否则光标会跳到末尾、打字会很难受。
     if (inp && document.activeElement !== inp) {
@@ -1142,7 +1162,7 @@
       el.value = raw;
       if (atEnd) { try { el.setSelectionRange(raw.length, raw.length); } catch (_) {} }
     }
-    var n = Math.max(1, Math.min(999999, parseInt(raw, 10) || 1));
+    var n = Math.max(BET_MIN, parseInt(raw, 10) || BET_MIN);
     S.bet = n;
     setBetBtn();
   });
@@ -1166,7 +1186,7 @@
     setBet(Math.max(1, Math.floor(S.me.coins)));
   };
   /**
-   * 梭哈按钮随余额刷新：文案跟着金额变（超 10 万用 M），余额 <1 时置灰。
+   * 梭哈按钮随余额刷新：文案跟着金额走（K/M/B 缩写），余额 <1 时置灰。
    * 挂在 renderMe() / setCoins() 上 —— 余额每次变化都会经过它们。
    */
   function syncAllIn() {
@@ -1174,13 +1194,7 @@
     if (!b) return;
     var c = (S.me && S.me.coins) || 0;
     b.disabled = c < 1;
-    /**
-     * 用户要求：金额超过 10 万就用 M 表示。
-     * ⚠️ 10 万 = 0.10M —— 短但明确；再往上用 K 更符合习惯，
-     *    但用户说的是 M，所以保持 M。
-     */
-    b.textContent = c >= 100000 ? (c / 1000000).toFixed(2) + 'M 梭哈'
-                                 : '梭哈 ' + fmtC(c);
+    b.textContent = c >= 1000 ? '梭哈 ' + fmtShort(c) : '梭哈';
   }
   // 两个独立开关：🎵 背景音乐 / 🔊 音效（互不影响）
   // 用 localStorage 记住选择，刷新后不再被重置为默认开启

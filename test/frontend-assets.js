@@ -71,6 +71,19 @@ t('下注区只剩「金额输入 + 梭哈」两个可交互元素',
 t('金额输入不再套外框（无 .stepper 包裹）',
   !/class="stepper"[\s\S]{0,200}id="betAmt"/.test(html),
   'betAmt 还在 .stepper 里 —— 那个描边框就是用户说的「丑框子」');
+// ⚠️ 这条是用户连提三次的要求：去掉 999999 上限。
+// 上限还在的话，「梭哈」会填进一个比余额小的数字 —— 看着是梭哈，其实不是。
+// 只查【代码】，注释里提到这个数字是解释「为什么去掉」，不算残留。
+const appCode = appJs.split('\n')
+  .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
+t('下注金额不再有 999999 上限',
+  !/999999/.test(appCode),
+  'app.js 代码里还有 999999 —— 梭哈会被这个上限截断');
+t('大数字缩写 K/M/B 已实现（1000→K、1e6→M、1e9→B）',
+  /function fmtShort/.test(appJs)
+    && /1e9/.test(appJs) && /1e6/.test(appJs) && /1e3/.test(appJs),
+  'fmtShort 没实现 K/M/B 缩写');
+
 t('app.js 里不再引用已删除的 minus/plus',
   !/\$\('#(minus|plus)'\)/.test(appJs),
   "app.js 还有 $('#minus') / $('#plus') —— HTML 里已无此元素，必然抛错");

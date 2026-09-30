@@ -482,16 +482,23 @@
  * 第一版沿用 .stepper 的 surface 底 + 描边，结果输入框看起来像按钮、
  * 像不能点。这里去掉所有边框和背景，只靠字号 + QUN 图标表达「这是金额」，
  * 靠 flex 撑满剩余宽度，触摸目标够大。
+ *
+ * ⚠️ 不能用 flex + justify-content:center —— 金额输入框是 flex:1，
+ *    它会撑满所有剩余空间，把图标推到最左边，中间没有真正的「居中」。
+ *    改用 grid 三列：图标 | 金额 | 对称占位，金额列文本居中，
+ *    这样「图标 + 数字」这一组在整行里是真正居中的。
  */
 .bet-amt {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
-  padding: 0 4px; height: 52px;
+  flex: 1; min-width: 0; height: 52px;
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+  gap: 8px; padding: 0 4px;
 }
 .bet-amt .qun-ic { width: 22px; height: 22px; flex: none; }
+.bet-amt::after { content: ''; width: 22px; }  /* 对称占位 */
 .bet-amt .bet-input {
-  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  min-width: 0; background: transparent; border: 0; outline: none;
   color: var(--fg); font-size: 30px; font-weight: 800; letter-spacing: .5px;
-  font-family: inherit; text-align: left; padding: 0;
+  font-family: inherit; text-align: center; padding: 0;
 }
 .bet-amt .bet-input::placeholder { color: var(--fg-3); }
 
