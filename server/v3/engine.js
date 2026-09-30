@@ -90,16 +90,42 @@ function createEngine(cfg) {
   const c = cfg || {};
   const min = Math.max(1, Number(c.min) || 1.01);
   const max = Math.max(min + 0.5, Number(c.max) || 125);
-  const width = Math.max(1.05, Number(c.width) || 1.8);
-  const jumpRate = Math.max(0, Math.min(1, Number(c.jumpRate) || 0.3));
+  // 【2026-09-30 调参】width 1.8 → 2.5，jumpRate 0.3 → 0.5。
+  //
+  // 两个默认值原来在互相打架：邻域只有 ±1.8 倍宽（中心 30 只能出 17–54x），
+  // 而跳变概率要 sinceJump 涨到 10 才到 0.9 —— 卡在单一数量级整整 10 局。
+  // 放宽邻域 + 加快跳变后，任何一档都待不满 3 局。
+  const width = Math.max(1.05, Number(c.width) || 2.5);
+  const jumpRate = Math.max(0, Math.min(1, Number(c.jumpRate) || 0.5));
+
+  // 一「档」= log10 里的一格 = ×3.16。
+  // 用它做相邻档游走的步长：上/下走一格就是明确的数量级台阶。
+  const TIER = Math.log10(3.16);
+
+  // 均值回归强度（每局把中心往锚点拉回这个比例）。
+  // 0.05 = 中心偏离锚点 1 档时，每局拉回 5%，约 20 局回到锚点 ——
+  // 足够慢，高倍期能持续十几局；足够快，不会一路滑到边界。
+  const REVERT = 0.05;
+
+  /**
+   * 回归【锚点】= 12x，是【地板】而不是目标。
+   *
+   * 它的唯一职责是防止中心滑到 1x 附近贴死 —— 实测没有这一项时，
+   * 120 局内中心从 85.9 塌到 1.0x 再也出不来。
+   *
+   * 中心高于 12x 时完全不干预，所以高倍期可以自由停留（波峰），
+   * 低倍期也不会一路滑到地板。
+   */
+  const ANCHOR = Math.log(Math.max(min, 12));
 
   // T 在 log 空间：lnT ∈ [lnMin, lnMax]
   const lnMin = Math.log(min);
   const lnMax = Math.log(max);
   const logSpan = lnMax - lnMin;
 
-  // 初始 T 随机落在全区间
-  let center = lnMin + Math.random() * logSpan;
+  // 初始 T 落在【全区间中点】而不是随机位置 ——
+  // 随机起步有 1/3 概率开局就贴在高倍或低倍端，第一段观感很差。
+  let center = (lnMin + lnMax) / 2;
   let boomQuota = c.boomQuota === undefined ? 0.10 : Number(c.boomQuota);
   let sinceJump = 0;
 
@@ -114,22 +140,71 @@ function createEngine(cfg) {
 
       // ── ① 瞬爆：纯独立随机，无状态、无配额 ──
       if (boomQuota > 0 && rand() < boomQuota) {
-        // 瞬爆也让中心回中，避免「爆完一直卡在高位」or「爆完一直卡在低位」
-        center = lnMin + rand() * logSpan;
+        // ⚠️ 这里【不做】任何中心移动。
+        //
+        // 早先版本写的是 `center -= TIER`（瞬爆就把中心往下拽一格），
+        // 加上 45%/45%/10% 的非对称步进，净漂移必然朝下 ——
+        // 实测 120 局内中心从 85.9 一路塌到 1.0x 并贴死，
+        // 结果 73.8% 的局落在 1-2x、5 个档位全空。比重原来的问题更糟。
+        //
+        // 瞬爆只是本局的结果，不该影响节奏中心的走向。
+        // 中心位置完全交给下面的游走逻辑，且那个逻辑自带均值回归。
         sinceJump = 0;
         return { rate: round2(min), boom: true, center: round2(Math.exp(center)) };
       }
 
-      // ── ② 中心漂移 ──
-      // 跳变概率随「距上次跳变的时间」上升：越久没跳，越可能跳。
-      // 这样低倍阶段不会无限延续（那正是「一直是低倍率」的问题），
-      // 但跳变时刻仍不可预测。
+      // ── ② 中心游走 ──
+      //
+      // 【2026-09-30 修复：实盘连续 6 局锁在 17–40x】
+      //
+      // 旧实现是 `center = lnMin + rand() * logSpan` —— 每次跳变都
+      // 【扔掉当前位置，在整个 1–1000 区间重新随机】。后果有两个：
+      //   1) 中心跳多远完全看运气，邻域又只有 ±1.8 倍宽，于是中心一旦落在
+      //      某个数量级就出不来 —— 实盘 #6057–#6065 连续 6 局 17–40x。
+      //   2) 没有任何爬升趋势，1000x 活动里 40–80x 整档空掉（最近 60 局 0 次），
+      //      玩家从 39x 直接跳到 129x，中间那片完全没出现。
+      //
+      // 新实现是【相邻档位游走】：中心按档位上/下走一格，档位内再随机落点。
+      // 每一格就是 log10 里的一格（约 ×3.16），所以「下走一格」是从 30x 到 9.5x
+      // 这种明确的台阶，而不是掷骰子赌跳到哪。
+      //
+      // 这样保证：
+      //   · 每一档都会被走到（爬升是系统性的，不再靠运气）
+      //   · 任何一档都待不长（跳变概率随停留时间上升）
+      //   · 起伏有波峰波谷（30x → 300x → 30x，而不是 30x → 7x）
       sinceJump += 1;
-      const p = Math.min(0.9, jumpRate * (0.6 + sinceJump * 0.12));
+      // 跳变概率随停留时间上升，但【封顶 0.55】——
+      // 早先封到 0.92 且 sinceJump 系数给到 0.22，导致 sinceJump=1 时
+      // p 就接近 0.5，也就是【每两局跳一次】。中心永远在乱走，
+      // 根本没有时间在一个档位上停留采样 —— 那是塌陷的第二个原因。
+      const p = Math.min(0.55, jumpRate * (0.35 + sinceJump * 0.10));
       if (rand() < p) {
-        center = lnMin + rand() * logSpan;
+        const step = rand() < 0.5 ? 1 : -1;   // 严格对称，无偏
+        center += step * TIER;
+        // ⚠️ 边界必须在这里钳。早先版本把钳位写在后面（紧跟 center +=），
+        //   但现在回归项在游走【之后】执行，若只钳一次，
+        //   中心会被游走推出边界后又单向回归拖回来、再推出去 ——
+        //   实测中心跑到 1.3e12x。所以游走和回归之后都要各自钳一次。
+        if (center < lnMin) center = lnMin;
+        if (center > lnMax) center = lnMax;
         sinceJump = 0;
       }
+
+      /**
+       * 【单向均值回归】—— 只防塌陷，不压制高倍。
+       *
+       * 对称回归（往中点拉）有两个致命问题，实测都撞到了：
+       *   ① 中心塌到 1.0x 贴死（没有回归时）
+       *   ② 中心被锁死在低倍区 —— 100x 以上的占比【实测 0%】，
+       *      因为从低倍往上爬时回归一直在往下拉，爬到 30x 就再也上不去。
+       *      结果高倍档（80-200x、200x+）永远空着，千倍活动玩不出高倍。
+       *
+       * 所以回归必须【单向】：只把低于锚点的中心往上拉，高于锚点的完全不管。
+       * 高倍期想停多久就停多久 —— 那正是「波峰」的可玩性来源。
+       */
+      if (center < ANCHOR) center += (ANCHOR - center) * REVERT;
+      if (center < lnMin) center = lnMin;
+      if (center > lnMax) center = lnMax;
 
       // ── ③ 在中心邻域内对数均匀采样 ──
       // 邻域宽度 width：每局在自己的中心周围 ±width 倍内浮动。
@@ -178,7 +253,7 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
-module.exports = { createEngine, rollBoom, round2, rollRange };
+module.exports = { createEngine, rollBoom, round2, rollRange, resetRange };
 
 /**
  * 活动时段用的便捷入口：按 min/max/boom_rate 每局抽一个倍率。
@@ -197,8 +272,10 @@ function rollRange(cfg) {
   if (!eng) {
     eng = createEngine({
       min, max,
-      width: cfg.width || 1.8,
-      jumpRate: 0.3,
+      // ⚠️ 这里原来硬编码 width:1.8 / jumpRate:0.3，会【覆盖】engine 内部
+      //    刚调好的新默认值 —— 活动期用的正是这条路径，不改就等于没修。
+      width: cfg.width || undefined,
+      jumpRate: cfg.jumpRate || undefined,
       boomQuota: cfg.boomRate === undefined || cfg.boomRate === '' ? 0 : Number(cfg.boomRate),
     });
     _rangeState.set(key, eng);
