@@ -86,7 +86,96 @@ function flightMs(rate, opts) {
    * opts.instant 保留（engine 仍会传），但不再影响结果 ——
    * 1.0x 以下公式本身就返回 0，语义天然一致。
    */
-  return Math.round(t * CFG.FLIGHT_SCALE * 1000);
+  const ms = Math.round(t * CFG.FLIGHT_SCALE * 1000);
+  return applyHighRateAccel(ms, r);
+}
+
+/**
+ * 【2026-09-30 高倍加速】倍率 > ACCEL_FROM 时压缩飞行时长。
+ *
+ * 用户要求：「1-100 正常速度，100 以上做曲线加速，1000x 最终 100 秒，
+ *            中间不要加得太快，不然一下就过去了」。
+ *
+ * 曲线 = 对数线性：每「翻一倍倍率」时长增加的时间完全相同。
+ *   100x  → 73.8s  （ACCEL_FROM 处，与原速完全一致，无缝衔接）
+ *   200x  → 81.7s  (+7.9s)
+ *   400x  → 89.6s  (+7.9s)
+ *   800x  → 97.5s  (+7.9s)
+ *   1000x → 100.0s (目标)
+ *
+ * 为什么是对数线性而不是「越往后越快」：
+ *   「越快」会让【时长随倍率下降】—— 1000x 只飞 24.5s 而 100x 飞 73.8s，
+ *   玩家一眼就能从「飞得特别快」认出千倍局。这和之前那些常量热点是同一类错误。
+ *   对数线性保证【时长 ∝ 倍率】严格单调递增，只是斜率递减。
+ *
+ * 1000x 以上用指数收敛兜底，保证无论 max_rate 配多大都不会飞出离谱时长
+ * （10000x 也只 112.6s）。engine.js 已删除 max_flight_ms 钳制，
+ * 所以这条兜底就是防卡服的最后一道防线。
+ */
+const ACCEL_FROM = 100;                                    // 加速起点
+const ACCEL_TARGET_MS = 100000;                             // 1000x = 100 秒
+const ACCEL_TAIL = 20000;                                   // 1000x 以上的渐近余量
+
+/**
+ * 未加成的原始飞行毫秒 —— 基准值的唯一来源。
+ *
+ * ⚠️ ACCEL_BASE_MS 必须在【模块加载时】就固定下来。
+ *   早先版本用 `applyHighRateAccel.base ??= rawFlightMs(...)` 惰性自举，
+ *   结果 flightMs() 与 rateAt() 可能各自初始化、各自持有不同的 base，
+ *   往返误差高达 99.9%（1000x 反解成 1857x）—— 那意味着玩家点逃跑时
+ *   屏幕显示一个倍率、按另一个倍率赔付，是直接的钱款错误。
+ *   常量在声明处一次算清，两个函数读同一个值，不可能不一致。
+ */
+const ACCEL_BASE_MS = Math.round(((Math.sqrt(40 * ACCEL_FROM - 24) - 4) / 2) * CFG.FLIGHT_SCALE * 1000);
+const ACCEL_HEAD_MS = ACCEL_TARGET_MS - ACCEL_BASE_MS;
+
+function applyHighRateAccel(ms, rate) {
+  // ⚠️ 必须用 >= 而不是 >：ACCEL_BASE_MS 处加成为恒等变换，
+  //   所以 100x 既走原速、也走加速分支都得到同一个值，接缝处不会出现
+  //   「100.00x 与 100.01x 差 73 秒」的断崖。
+  if (!(rate >= ACCEL_FROM)) return ms;
+  if (rate <= 1000) {
+    return Math.round(ACCEL_BASE_MS + ACCEL_HEAD_MS * Math.log10(rate / ACCEL_FROM));
+  }
+  const over = Math.log10(rate / 1000);
+  return Math.round(ACCEL_TARGET_MS + ACCEL_TAIL * (1 - Math.exp(-over)));
+}
+
+/**
+ * applyHighRateAccel 的【严格逆变换】—— ms → 倍率。
+ *
+ * ⚠️⚠️ 这两个函数必须严格互逆，否则资金结算会错：
+ *   玩家在 30 秒点逃跑，rateAt(30000) 必须反推出与结算时【完全相同】的倍率，
+ *   否则屏幕上显示 30x、实际按 12x 赔付 —— 直接的钱款错误。
+ *   test/flight-curve.js 会做往返验证（误差必须为 0）。
+ */
+function unapplyHighRateAccel(ms) {
+  if (!(ms > ACCEL_BASE_MS)) return ms;
+
+  // ① 由加速后的时长反解出【倍率】
+  //    正向是 ms = BASE + HEAD·log₁₀(rate/100)，所以 log₁₀(rate/100) = (ms−BASE)/HEAD。
+  let rate;
+  if (ms <= ACCEL_TARGET_MS) {
+    rate = ACCEL_FROM * Math.pow(10, (ms - ACCEL_BASE_MS) / ACCEL_HEAD_MS);
+  } else {
+    const tail = 1 - (ms - ACCEL_TARGET_MS) / ACCEL_TAIL;
+    if (tail <= 0) return Infinity;          // 已到渐近线，倍率趋近无穷
+    rate = 1000 * Math.pow(10, -Math.log(tail));
+  }
+
+  // ② 再把倍率换算回【未加速的等效时长】交给 rateAt 的原版公式。
+  //    ⚠️ 这一步早先漏掉了 —— 少了它，rateAt 会拿「压缩过的时长」
+  //       直接喂进原版公式，反解出的倍率与真实爆点完全对不上
+  //       （实测 1000x 被反解成 1857x，误差 99.9%）。
+  return rawFlightMs(rate);
+}
+
+/** 未加成的原始飞行毫秒（倍率 → 等效时长，与 flightMs 的前半段同源） */
+function rawFlightMs(rate) {
+  const r = Math.max(rate, 1);
+  const disc = 40 * r - 24;
+  if (disc < 0) return 0;
+  return Math.round(((Math.sqrt(disc) - 4) / 2) * CFG.FLIGHT_SCALE * 1000);
 }
 
 /**
@@ -98,7 +187,10 @@ function flightMs(rate, opts) {
  * ⚠️ 前后端必须用同一个公式、同一个缩放，否则屏幕上显示的倍率和真实结算倍率会错位。
  */
 function rateAt(elapsedMs, scale = CFG.FLIGHT_SCALE) {
-  const t = (elapsedMs / 1000) / scale;
+  // 先把「加速压缩过」的时长还原回未加速的等效时长，
+  // 再走原版公式 —— 保证显示倍率与结算倍率绝对一致。
+  const ms = unapplyHighRateAccel(Number(elapsedMs) || 0);
+  const t = (ms / 1000) / scale;
   return t / 2 + (t * t - t) / 10 + 1;
 }
 
@@ -150,8 +242,29 @@ function decideRate(cfg, pot, pool, event, ctx) {
    * 上限由活动自己的 max 决定 —— 运营显式配的高倍时段不该被日常护栏截断。
    */
   if (event) {
-    const lo = Math.max(min, Number(event.rate) || min);
-    return { rate: round2(lo), fast: false, mode: 'event:' + (event.name || '') };
+    /**
+     * 【2026-09-30 重写：活动改走老虎机引擎 v3】
+     *
+     * 原来这里是一次性算出一个固定的 event.rate 就返回 —— 整个活动时段
+     * 同一个倍率，玩家看到的是「一整小时都爆在 23.4x」。这既不是活动该有的
+     * 体验，也让 events_json 里的 min/max/weight 三个字段实际只被用了一次。
+     *
+     * 现在：活动的 min/max 作为倍率【范围】，boom_rate 作为瞬爆概率，
+     * 每局由 v3 引擎独立抽取 —— 活动期同样有起伏，且瞬爆率可控。
+     * v3 是纯本地算法，零 API 成本。
+     */
+    const ev = require('./v3/engine');
+    const d = ev.rollRange({
+      min: Math.max(min, Number(event.min) || 1),
+      max: Number(event.max) || 1000,
+      boomRate: event.boom_rate,
+      width: event.width,
+    });
+    return {
+      rate: d.rate, fast: false,
+      mode: 'event-v3:' + (event.name || ''),
+      event: { boom: d.boom, center: d.center },
+    };
   }
 
   // 无下注 → 保底区间随机
@@ -497,9 +610,15 @@ function activeEvent(cfg, now = new Date()) {
     const lo = Math.max(1, Number(ev.min) || 1.10);
     const hi = Math.max(lo, Number(ev.max) || 10);
     const w = Math.max(0, Math.min(1, Number(ev.weight ?? 1)));
-    // weight 越大越偏向高倍率：指数 1（均匀）→ 2（明显右偏）
-    const r = 1 - Math.pow(1 - Math.random(), 1 + w);
-    return { name: ev.name || '限时活动', min: lo, max: hi, weight: w, rate: round2(lo + r * (hi - lo)) };
+    // ⚠️ weight 不再用来「一次性抽一个固定倍率」—— 那个做法让整个活动时段
+    // 都是同一个数，玩家看到一整小时都在爆 23.4x。
+    // 现在 weight 只作为 v3 的兼容字段保留，倍率由 v3 每局独立抽取。
+    // 瞬爆概率由 boom_rate（0–1，如 0.30 = 30%）控制。
+    const boomRate = Math.max(0, Math.min(1, Number(ev.boom_rate ?? 0)));
+    return {
+      name: ev.name || '限时活动', min: lo, max: hi, weight: w, boom_rate: boomRate,
+      width: ev.width,
+    };
   }
   return null;
 }

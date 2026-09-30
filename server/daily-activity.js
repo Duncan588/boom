@@ -30,8 +30,10 @@ const CFG_DEFAULT = {
   window_from: '18',       // 北京时间 18:00 起
   window_to: '23',         // 到 23:00 止（含 22 点那一小时）
   min_rate: '1',
-  max_rate: '100',         // 用户指定封顶 100x
-  weight: '0.85',          // 偏向高倍
+  max_rate: '1000',        // 【2026-09-30】用户要求活动封顶 1000x（原 100x）
+  weight: '0.85',          // 旧字段：曾用于一次性抽固定倍率，现已由 v3 每局抽取取代
+  boom_rate: '0.30',       // 【2026-09-30 新增】活动期瞬爆概率 30%
+  width: '1.8',            // v3 采样邻域宽度（对数）
   guild_id: '',            // 由 .env 提供
   channel_id: '921394612378152991',
   announce: '1',
@@ -88,6 +90,8 @@ class DailyHighRate {
       min: Number(g('min_rate')) || 1,
       max: Number(g('max_rate')) || 100,
       weight: Number(g('weight')) ?? 0.85,
+      boom: Math.max(0, Math.min(1, Number(g('boom_rate'))) || 0),
+      width: Number(g('width')) || 1.8,
       guildId: g('guild_id'),
       channelId: g('channel_id'),
       announce: String(g('announce')) === '1',
@@ -233,6 +237,10 @@ class DailyHighRate {
       min: c.min,
       max: c.max,
       weight: c.weight,
+      // 【2026-09-30】活动期瞬爆概率。decideRate 的活动分支读它，
+      // 传给 v3 引擎的 boomQuota —— 每局独立随机，长期收敛到这个值。
+      boom_rate: c.boom,
+      width: c.width,
       enabled: true,
     };
 

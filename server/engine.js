@@ -262,18 +262,24 @@ class Engine {
       } catch (_) { /* Jev 是可选增强，失败不影响本局 */ }
     }
     const rate = dec.rate;
-    // 飞行时长上限：原版靠资金池约束不会出现极端值，但我们允许后台把 max_rate 调到
-    // 1000，flightMs(1000) = 700 秒，会把整个引擎 sleep 住（单进程引擎，12 分钟卡死）。
-    // 这里钳一个物理上限，保证每一局都能在可接受时间内结束。
-    //
-    // 100x = 73.8s（实测），所以活动封顶 100x 时上限必须 > 73.8s，
-    // 否则高倍局会被静默截断成 90s 但倍率仍显示 100x（显示与结算不一致）。
-    const rawMs = flightMs(rate, { instant: dec.fast });
-    const CAP_MS = Number(cfg.max_flight_ms) || 120000;   // 默认 120s
-    const ms = Math.min(rawMs, CAP_MS);
-    if (rawMs > CAP_MS) {
-      console.warn(`[engine] 爆点 ${rate.toFixed(2)}x 飞行 ${(rawMs / 1000).toFixed(1)}s 超过上限，钳到 ${CAP_MS / 1000}s`);
-    }
+    /**
+     * 【2026-09-30 删除 max_flight_ms 硬上限】
+     *
+     * 原来这里有 `Math.min(rawMs, 120000)` —— 120 秒物理上限。
+     * 它存在的原因是：原版曲线下 flightMs(1000) = 700 秒，
+     * 而引擎是【单进程串行】的，sleep(700s) 期间全服都不能开下一局。
+     *
+     * 副作用很严重：显示 1000x 但只飞 120 秒 —— 玩家看到千倍结果只等了 2 分钟，
+     * 觉得被骗；而且高倍局的【显示时长与结算时长不一致】。
+     *
+     * 现在 game-logic.js 加入了高倍加速曲线（100x = 73.8s，1000x = 100s，
+     * 10000x 也只有 112.6s），最慢的一局就是 100x 的 73.8 秒，
+     * 天然低于原来的 120 秒上限 —— 所以上限已经没有任何存在必要。
+     *
+     * ⚠️ 若这里再钳一次，会重新引入「显示倍率与实际时长不符」的 bug。
+     *    game-logic 的加速曲线已用指数收敛兜底，无论 max_rate 配多大都不会飞超时。
+     */
+    const ms = flightMs(rate, { instant: dec.fast });
     db.get().prepare('UPDATE rounds SET rate = ? WHERE id = ?').run(rate, roundId);
     this.current.rate = rate;
     this.lastBoom = rate;                       // Jev 下一局的 state 依据
