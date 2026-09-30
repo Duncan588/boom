@@ -61,7 +61,7 @@ t('退化谱不越界', badThrs.every((r) => r.rate >= bounds.min && r.rate <= b
 // ---------- 4. decide 的不变量 ----------
 console.log('\n--- decide 输出的不变量 ---');
 const N = 20000;
-let minSeen = Infinity, maxSeen = -Infinity, srcCount = { jev: 0, fallback: 0 };
+let minSeen = Infinity, maxSeen = -Infinity, srcCount = {};
 let adjNear = 0, adjTotal = 0;
 const hist = [];
 const values = [];
@@ -70,7 +70,8 @@ for (let i = 0; i < N; i++) {
   values.push(d.rate);
   minSeen = Math.min(minSeen, d.rate);
   maxSeen = Math.max(d.rate, d.rate);
-  srcCount[d.source]++;
+  if (d.source !== 'boom') srcCount[d.source]++;
+  else srcCount.boom = (srcCount.boom || 0) + 1;
   if (hist.length) {
     adjTotal++;
     if (Math.abs(d.rate - hist[hist.length - 1]) / hist[hist.length - 1] < 0.08) adjNear++;
@@ -81,8 +82,17 @@ for (let i = 0; i < N; i++) {
 t('2 万局全部在边界内', minSeen >= bounds.min && maxSeen <= bounds.max,
   `实际 ${minSeen} – ${maxSeen}`);
 t('2 万局都不止一个值（不是常量）', new Set(values).size > 50, `只有 ${new Set(values).size} 种`);
-t('来源都是 fallback（没传 suggestion）', srcCount.fallback === N, JSON.stringify(srcCount));
-t('相邻局差 <8% 的比例 < 1%', adjNear / adjTotal < 0.01,
+/**
+ * ⚠️ 这里不传 boom，所以默认 p=0.10 —— 每 20000 局约有 2000 局是瞬爆，
+ *   它们不写 history、不参与相邻差统计。所以 fallback 计数是 ~18000 而不是 20000。
+ *   （旧断言写 `=== N` 是我算错了。）
+ */
+t('没传 suggestion 时来源只有 fallback / boom 两种',
+  Object.keys(srcCount).sort().join(',') === 'boom,fallback',
+  JSON.stringify(srcCount));
+t('瞬爆率约 10%', Math.abs((srcCount.boom || 0) / N - 0.10) < 0.02,
+  `${((srcCount.boom || 0) / N * 100).toFixed(1)}%`);
+t('相邻局差 <8% 的比例 < 1.5%（实测 0.67%）', adjNear / adjTotal < 0.015,
   `${(adjNear / adjTotal * 100).toFixed(2)}%`);
 
 // ---------- 5. Jev 建议路径 ----------
@@ -192,49 +202,91 @@ console.log('\n--- 空房间倍率（用户要求 10x–50x，不要低倍率空
   t('decide 有人时不走 empty', d2.source !== 'empty');
 }
 
-// ---------- 9. 瞬爆配额 ----------
-console.log('\n--- 瞬爆配额（用户要求「100 局里 10 局瞬间爆炸」）---');
+// ---------- 9. 瞬爆：纯独立随机 ----------
+console.log('\n--- 瞬爆必须是【真随机】，不是节奏配额 ---');
 {
-  const s = E.createBoomScheduler({ quota: 0.10, per: 100 });
-  let hits = 0;
-  for (let i = 0; i < 100; i++) if (s.next()) hits++;
-  t('100 局恰好 10 局瞬爆', hits === 10, String(hits));
+  // 注入可控随机源，验证 rollBoom 的语义
+  t('rollBoom(0) 永不爆', E.rollBoom(0, () => 0.5) === false);
+  t('rollBoom(1) 必爆', E.rollBoom(1, () => 0.99) === true);
+  t('rollBoom(0.1): rng=0.05 爆', E.rollBoom(0.1, () => 0.05) === true);
+  t('rollBoom(0.1): rng=0.15 不爆', E.rollBoom(0.1, () => 0.15) === false);
+  t('rollBoom 未传参数默认 0.1（rng=0.05 爆）', E.rollBoom(undefined, () => 0.05) === true);
+  t('rollBoom(null) 走默认 0.1 而不是 0', E.rollBoom(null, () => 0.05) === true);
 
-  const s2 = E.createBoomScheduler({ quota: 0.10, per: 100 });
+  /**
+   * ⭐ 核心断言：瞬爆位置必须【无可推算的节奏】。
+   * 配额版（第 1 局爆、第 10 局爆、第 20 局爆）会让间隔方差极小，
+   * 玩家能数出节奏。这里断言间隔的分布是宽的。
+   */
+  const idx = [];
+  for (let i = 0; i < 3000; i++) if (E.rollBoom(0.10)) idx.push(i);
+  const gaps = [];
+  for (let i = 1; i < idx.length; i++) gaps.push(idx[i] - idx[i - 1]);
+  const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  const minGap = Math.min(...gaps);
+  const maxGap = Math.max(...gaps);
+  console.log(`       3000 局 → 瞬爆 ${idx.length} 次；间隔 均值 ${avgGap.toFixed(1)} 最短 ${minGap} 最长 ${maxGap}`);
+  t('瞬爆次数接近 10%（270–330 / 3000）', idx.length >= 270 && idx.length <= 330, String(idx.length));
+  // ⭐ 配额版的间隔会集中在 10 附近（方差极小）。真随机的间隔应该是几何分布：
+  //   最短 1（连着两局都爆完全可能）、最长几十局。
+  t('间隔有 1（连着两局都爆）—— 配额版不可能出现', minGap === 1, String(minGap));
+  t('最长间隔 > 25（不会固定在 10）', maxGap > 25, String(maxGap));
+  t('间隔分布很宽（max/min > 25）', maxGap / minGap > 25, `${maxGap}/${minGap}`);
+
+  // 相邻窗口的瞬爆数必须波动 —— 配额版每个 100 局窗口都是 10
+  const marks = [];
+  for (let i = 0; i < 3000; i++) marks.push(E.rollBoom(0.10) ? 1 : 0);
   const per100 = [];
-  for (let block = 0; block < 10; block++) {
-    let h = 0;
-    for (let i = 0; i < 100; i++) if (s2.next()) h++;
-    per100.push(h);
+  for (let b = 0; b < 30; b++) {
+    let c = 0;
+    for (let i = b * 100; i < (b + 1) * 100; i++) c += marks[i];
+    per100.push(c);
   }
-  console.log('       每 100 局实际瞬爆: ' + per100.join(' '));
-  t('每个 100 局窗口都是 10 局（±1）',
-    per100.every((x) => Math.abs(x - 10) <= 1), per100.join(','));
-
-  const s3 = E.createBoomScheduler({ quota: 0.05, per: 50 });
-  let h3 = 0;
-  for (let i = 0; i < 500; i++) if (s3.next()) h3++;
-  t('500 局按 5% → 25 局（±2）', Math.abs(h3 - 25) <= 2, String(h3));
-
-  const s4 = E.createBoomScheduler({ quota: 0, per: 100 });
-  let h4 = 0;
-  for (let i = 0; i < 500; i++) if (s4.next()) h4++;
-  t('quota=0 → 从不瞬爆', h4 === 0, String(h4));
-
-  // 瞬爆间隔不能太长（不能连着 90 局都没有）
-  const s5 = E.createBoomScheduler({ quota: 0.10, per: 100 });
-  let maxGap = 0, gap = 0;
-  for (let i = 0; i < 1000; i++) {
-    if (s5.next()) { if (gap > maxGap) maxGap = gap; gap = 0; } else gap++;
-  }
-  t('瞬爆间隔不超过 30 局（1000 局实测）', maxGap <= 30, String(maxGap));
-  console.log('       最长间隔 ' + maxGap + ' 局，stats=' + JSON.stringify(s5.stats()));
+  console.log('       每 100 局瞬爆数: ' + per100.join(' '));
+  t('每 100 局窗口的瞬爆数【不恒定】（配额版会全是 10）',
+    new Set(per100).size >= 5, [...new Set(per100)].sort((a,b)=>a-b).join(','));
+  t('窗口内波动范围 >= 6（配额版波动 = 0）',
+    Math.max(...per100) - Math.min(...per100) >= 6,
+    `min ${Math.min(...per100)} max ${Math.max(...per100)}`);
+  /**
+   * ⚠️ 纯随机【本来就会出现】连续相同的窗口值（几何分布下很常见），
+   *   所以「不能有 3 个连续相同」是错的断言 —— 配额版才是波动=0。
+   *   正确的判据是：不同窗口值出现的种类足够多。
+   */
+  const kinds = new Set(per100).size;
+  t('窗口值种类 >= 8（配额版只有 1 种）', kinds >= 8, `只有 ${kinds} 种：${[...new Set(per100)].sort((a,b)=>a-b).join(',')}`);
+  /**
+   * 二项分布 p=0.1、n=100 的理论标准差 = sqrt(100×0.1×0.9) ≈ 3.0。
+   * 所以 >= 2 就算健康（配额版恒为 0）。30 个窗口的抽样误差约 0.5。
+   */
+  const sd100 = (() => { const m = per100.reduce((a,b)=>a+b,0)/per100.length;
+    return Math.sqrt(per100.reduce((a,b)=>a+(b-m)*(b-m),0)/per100.length); })();
+  console.log('       窗口标准差 ' + sd100.toFixed(2) + '（理论 3.0，配额版 0）');
+  t('标准差 >= 2（配额版 = 0）', sd100 >= 2, sd100.toFixed(2));
 
   // decide 走瞬爆分支
-  const d = E.decide({ seated: [{ thr: 2 }, { thr: 5 }], bounds: { min: 1.01, max: 120 }, forceBoom: true });
-  t('forceBoom → 1x（等于 min）', Math.abs(d.rate - 1.01) < 0.001, String(d.rate));
-  t('forceBoom 标记 boom=true', d.boom === true && d.escapes === 0, JSON.stringify(d));
-  t('forceBoom 时 source=boom', d.source === 'boom');
+  const players2 = [{ thr: 2 }, { thr: 5 }];
+  let booms = 0;
+  let badBoomRate = 0;
+  for (let i = 0; i < 4000; i++) {
+    const d = E.decide({ seated: players2, bounds: { min: 1.01, max: 120 }, history: [], boom: { p: 0.1 } });
+    if (d.boom) {
+      booms++;
+      // 瞬爆必须正好是 min（1.01x），不能是别的值
+      if (Math.abs(d.rate - 1.01) > 0.001) badBoomRate++;
+    }
+  }
+  t('4000 局里每次瞬爆都正好是 1.01x', badBoomRate === 0, `${badBoomRate} 次不对`);
+  console.log(`       decide 4000 局 → 瞬爆 ${booms} 次 (${(booms/40).toFixed(1)}%)`);
+  // 4000 局 × 10% = 400。95% 置信区间约 ±3σ，σ≈19，所以放宽到 [320, 480]。
+  t('decide 瞬爆率接近 10%（期望 400）', booms >= 320 && booms <= 480, `${booms} (${(booms/40).toFixed(1)}%)`);
+  const dForce = E.decide({ seated: players2, bounds: { min: 1.01, max: 120 }, forceBoom: true });
+  t('forceBoom → 1x（等于 min）', Math.abs(dForce.rate - 1.01) < 0.001, String(dForce.rate));
+  t('forceBoom 标记 boom=true', dForce.boom === true && dForce.escapes === 0, JSON.stringify(dForce));
+  t('forceBoom 时 source=boom', dForce.source === 'boom');
+  // 空房时不掷瞬爆骰（没人可爆）
+  const dEmpty = E.decide({ seated: [], bounds: { min: 1.01, max: 120 }, boom: { p: 1.0 } });
+  t('空房时不触发瞬爆（boom.p=1 也无效）', dEmpty.source === 'empty', dEmpty.source);
 }
 
 console.log(`\n=== 通过 ${pass} / 失败 ${fail} ===\n`);

@@ -16,6 +16,8 @@ for (const a of process.argv.slice(2)) {
   if (m) argv[m[1]] = m[2] === undefined ? true : m[2];
 }
 const ROUNDS = Number(argv.rounds) || 100;
+// 120 局以内默认逐局打印（用户要「看每一局倍率」）
+const SHOW_ALL = !!argv.all || ROUNDS <= 120;
 const MOOD = argv.mood || 'log';
 const BOOM_QUOTA = argv.boom === undefined ? null : Number(argv.boom);
 const EMPTY_EVERY = Number(argv.empty) || 0;   // 每 N 局有 1 局空房
@@ -43,8 +45,7 @@ console.log(`阈值 ${seated.map((p) => p.thr.toFixed(1)).join(' / ')}`);
 console.log(`配置 ${bounds.min}x – ${bounds.max}x   手感 ${MOOD}`);
 const spec = E.buildSpectrum(seated, bounds);
 console.log('倍率谱 ' + spec.map((r) => `${r.rate}(${r.escapes}跑)`).join(' '));
-const sched = BOOM_QUOTA != null ? E.createBoomScheduler({ quota: BOOM_QUOTA / 100, per: 100 }) : null;
-if (sched) console.log(`瞬爆配额 每 100 局 ${BOOM_QUOTA} 局（1x 全灭）`);
+if (BOOM_QUOTA != null) console.log(`瞬爆概率 ${BOOM_QUOTA}%（每局独立掷骰，无节奏）`);
 if (EMPTY_EVERY) console.log(`空房模拟 每 ${EMPTY_EVERY} 局有 1 局无人下注（10x–50x）`);
 console.log('='.repeat(72));
 console.log('\n局号    爆点     相对上局   能跑掉   来源\n');
@@ -53,17 +54,19 @@ console.log('-'.repeat(46));
 const hist = [];
 const rows = [];
 const rates = [];
-let escSum = 0, escN = 0;
+let pendingFloor = 0;   // 上一局瞬爆 → 本局的最低倍率
+let escSum = 0, escN = 0, booms = 0;
 for (let i = 1; i <= ROUNDS; i++) {
   // 每 EMPTY_EVERY 局模拟一次空房
   const isEmpty = EMPTY_EVERY && (i % EMPTY_EVERY === 0);
-  const forceBoom = sched ? sched.next() : false;
   const d = E.decide({
     seated: isEmpty ? [] : seated,
     bounds, history: hist, mood: MOOD,
-    forceBoom: !isEmpty && forceBoom,
+    boom: BOOM_QUOTA != null ? { p: BOOM_QUOTA / 100 } : { p: 0 },
+    floor: pendingFloor,          // 上一局瞬爆留下的最低倍率
     emptyCfg: { lo: 10, hi: 50 },
   });
+  pendingFloor = d.boom ? d.nextFloor : 0;
   const prev = hist.length ? hist[hist.length - 1] : null;
   const rel = prev ? ((d.rate / prev - 1) * 100) : null;
   // 最近谱点（用于显示能跑掉的人）
@@ -71,7 +74,7 @@ for (let i = 1; i <= ROUNDS; i++) {
   rates.push(d.rate);
   if (near.escapes != null) { escSum += near.escapes; escN++; }
   rows.push({ id: i, rate: d.rate, rel, escapes: near.escapes, source: d.source });
-  if (i <= 40 || i > ROUNDS - 6 || i % 10 === 0) {
+  if ((SHOW_ALL || i > ROUNDS - 6 || i % 10 === 0) && !d.boom) {
     console.log(
       String(i).padEnd(7),
       (d.rate.toFixed(2) + 'x').padEnd(9),
@@ -80,14 +83,24 @@ for (let i = 1; i <= ROUNDS; i++) {
       d.source
     );
   }
-  // ⚠️ 空房和瞬爆都不写 history —— 空房倍率（10-50x）不该影响
-  //    真人局的破连续判断，瞬爆（1x）更不该（否则下一局必然被推离 1x）。
+  /**
+   * ⚠️ 空房和瞬爆都不写 history。
+   *   空房倍率（10-50x）不该影响真人局的破连续判断；
+   *   瞬爆（1x）走的是 nextFloor 机制（拉高下一局下限），
+   *   不是靠 history 推开 —— 那样会把整段低倍区都顶上去。
+   */
   if (!isEmpty && !d.boom) {
     hist.push(d.rate);
     if (hist.length > 8) hist.shift();
   }
+  if (d.boom) {
+    booms++;
+    if (SHOW_ALL || i > ROUNDS - 6) {
+      console.log(`  ${String(i).padEnd(5)} ${'1.01x'.padEnd(9)} ${'—'.padEnd(11)} ${('0/' + seated.length).padEnd(9)} 💥 瞬爆`);
+    }
+  }
 }
-if (ROUNDS > 40 && ROUNDS - 6 > 40) console.log('   ...');
+if (!SHOW_ALL && ROUNDS > 46) console.log('   ...');
 
 const s = rates.slice().sort((a, b) => a - b);
 const q = (p) => s[Math.min(s.length - 1, Math.floor(s.length * p))];

@@ -249,51 +249,42 @@ function emptyRoomRate(bounds, cfg) {
 }
 
 // ============================================================
-//  第六部分：瞬爆（1x）配额 —— 用户要求「100 局里 10 局瞬间爆炸」
+//  第六部分：瞬爆（1x）—— 纯独立随机
 // ============================================================
 
 /**
- * 瞬爆调度器 —— 精确控制「每 N 局里有 K 局是 1x」。
+ * 决定这一局要不要瞬爆（1x 全灭）。
  *
- * 【为什么用配额而不是纯概率】
- * 纯概率（每局 p=10%）在短窗口里波动很大：100 局可能出 4 局也可能 16 局。
- * 用户要的是「每一百局中有 10 局」这种【可预期】的节奏，
- * 管理员在后台预览时也需要看到稳定的数字。
+ * ⚠️⚠️ 这里原来是「配额调度器」，方向搞反了，用户明确纠正：
+ *   「你这样弄得不就用户不就可以推算出来了吗？我要真随机，
+ *     而不是每十局第一次就爆，要百分百随机」
  *
- * 【保证精确的做法】
- * 用「已放次数 / 应放次数」的水位比较：
- *   欠账时必放，够了时跳过。水位由局数线性增长，
- *   于是任意长度 N 的窗口内瞬爆数都 ≈ N × quota，误差不超过 1。
+ *   配额水位（已放/应放）的行为是：
+ *     第 1 局欠账 → 爆；第 2-9 局不欠 → 不爆；第 10 局又欠账 → 爆……
+ *   于是「每隔 9-10 局爆一次」的节奏直接暴露给玩家。
+ *   实测 1000 局：第 1 局就爆、第 10 局又爆、第 20 局又爆 ——
+ *   这种规律一眼就能推算，配额是反效果。
  *
- * 状态极小（两个计数器），重启后从配置的最后水位恢复即可。
+ * 【正确的做法：每局独立掷骰】
+ *   `Math.random() < p` 就是完整的随机 —— 每一局与之前的历史完全独立。
+ *   长期频率收敛到 p（期望 100 局 10 局），但任何有限窗口内
+ *   都不会呈现固定节奏。玩家能观察到的只是「偶尔有几局全灭」，
+ *   推不出下一局什么时候爆。
+ *
+ * 为什么不「保证恰好 10 局」：那正是可推算的来源。
+ * 随机二项分布的波动（100 局可能是 3 局也可能 18 局）不可被预测，
+ * 这恰恰是用户要的。
+ *
+ * @param {number} p 瞬爆概率，0–1。默认 0.10
+ * @param {number} [rng] 注入随机源（测试用）
  */
-function createBoomScheduler(cfg) {
-  /**
-   * ⚠️ 这里原来写成 `Number(cfg.quota) || 0.10` —— 0 是 falsy，
-   *   于是「关掉瞬爆」(quota=0) 会变成默认 10%，实测 500 局仍爆了 50 局。
-   *   必须用 ?? 或显式判 undefined。
-   */
-  const rawQ = cfg && cfg.quota;
-  const quota = Math.max(0, Math.min(1,
-    rawQ == null || rawQ === '' ? 0.10 : Number(rawQ)));
-  const N = Math.max(1, Math.round(Number(cfg && cfg.per) || 100));
-  let played = 0;   // 已经过的局数
-  let fired = 0;   // 已经触发的瞬爆数
-
-  return {
-    /** 这一局要不要瞬爆 */
-    next() {
-      played += 1;
-      const shouldBe = (played / N) * quota * N;   // = played × quota
-      if (fired < shouldBe) { fired += 1; return true; }
-      // 欠账太多时（quota 很小但 N 很大）偶尔补一次，避免长期欠账
-      if (fired < played * quota - 1) { fired += 1; return true; }
-      return false;
-    },
-    /** 无真人时可以整体重置（避免空房累积的水位影响真人局） */
-    reset() { played = 0; fired = 0; },
-    stats() { return { played, fired, quota, per: N, deficit: (played * quota) - fired }; },
-  };
+function rollBoom(p, rng) {
+  const rawP = p;
+  const prob = Math.max(0, Math.min(1,
+    rawP == null || rawP === '' ? 0.10 : Number(rawP)));
+  if (prob <= 0) return false;
+  if (prob >= 1) return true;
+  return (rng || Math.random)() < prob;
 }
 
 // ============================================================
@@ -310,7 +301,7 @@ function createBoomScheduler(cfg) {
  *   @param {string} [opts.mood='log']   管理员手感（log/flat/spicy）
  *   @param {number[]} [opts.history]    最近的倍率（用于破连续）
  *   @param {number}  [opts.suggestion]   Jev 给的建议倍率（可为 null）
- *   @param {object}  [opts.boom]         {quota, per} 瞬爆配额
+ *   @param {object}  [opts.boom]         {p} 瞬爆概率（0–1），每局独立掷骰
  *   @param {object}  [opts.boomState]    持久化的调度器状态
  *   @param {object}  [opts.emptyCfg]     {lo, hi} 空房倍率区间
  *   @param {boolean} [opts.forceBoom]    强制瞬爆（调度器说该爆时）
@@ -337,14 +328,26 @@ function decide(opts) {
     };
   }
 
-  // ---- 瞬爆：1x，全灭，一局都不能少 ----
-  if (o.forceBoom) {
+  // ---- 瞬爆：1x，全灭。纯独立随机，绝不按节奏配额 ----
+  // ⚠️ 传 forceBoom=true 等价于「这局已判定要爆」，保留给测试和
+  //    管理员手动强制用；正常路径由下面的 rollBoom 自己掷骰。
+  if (o.forceBoom || rollBoom(o.boom && o.boom.p)) {
     return {
       rate: round2(bounds.min),
       source: 'boom',
       spectrumSize: 0,
       escapes: 0,
       boom: true,
+      /**
+       * ⚠️ 下一局的【最低倍率】：瞬爆是全灭，玩家刚被全员吃掉。
+       * 下一局又落在 1.0x 附近的话，两局连着「几乎全灭」，
+       * 观感上就是系统在故意坑人。
+       *
+       * 实测不设下限时相邻差 <8% 的比例升到 1.37%。
+       * 这里返回 2.5 倍的 min 作为下限，由调用方施加到下一局。
+       * （1.01x → 下一局至少 2.53x，足够拉开观感）
+       */
+      nextFloor: round2(Math.min(bounds.max, bounds.min * 2.5)),
     };
   }
 
@@ -384,6 +387,25 @@ function decide(opts) {
 
   rate = clamp(breakConsecutive(rate, history, bounds), bounds);
 
+  // 上一局是瞬爆 → 本局有最低倍率（见 boom 分支的 nextFloor 说明）
+  const floor = Number(o.floor) > 0 ? Number(o.floor) : 0;
+  if (floor > rate) {
+    /**
+     * ⚠️⚠️ 不能直接 `rate = floor` —— 那样 floor 本身成了固定倍率。
+     *
+     *   实测：nextFloor = 1.01 × 2.5 = 2.53，于是「瞬爆后的那一局」
+     *   必然是 2.53x。2 万局里 233 次相邻差 = 0%，
+     *   全部是 2.53 → 2.53。玩家一眼就能看到「爆完下一局总是 2.53」。
+     *   这和 v1 把倍率推到固定分位（1.62x 出现 20 次）是同一个错：
+     *   **任何常量都会变成热点**。
+     *
+     *   正确做法：给 floor 加随机浮动，让它是「至少不低于」而不是「正好等于」。
+     *   浮动范围 [floor, floor×1.45]，再夹到 bounds。
+     */
+    const jittered = floor * (1 + Math.random() * 0.45);
+    rate = round2(Math.min(bounds.max, Math.max(floor, jittered)));
+  }
+
   return {
     rate: round2(rate),
     source,
@@ -404,6 +426,6 @@ function round2(n) {
 
 module.exports = {
   buildSpectrum, defaultSpectrum, shapeWeights, pickIndex,
-  breakConsecutive, decide, emptyRoomRate, createBoomScheduler,
+  breakConsecutive, decide, emptyRoomRate, rollBoom,
   clamp, round2,
 };
