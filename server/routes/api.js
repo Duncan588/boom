@@ -202,6 +202,15 @@ function register(router, engine) {
         minRate: Number(s.min_rate) || CFG.MIN_RATE,
         maxRate: Number(s.max_rate) || CFG.MAX_RATE,
         flightScale: CFG.FLIGHT_SCALE,
+        /**
+         * 【2026-10-01】tick 间隔也要下发。前端插值用 TICK_MS 归一，
+         * 之前它在 app.js 里写死 100 —— 服务端真值一改，前端就成了另一个真值，
+         * 插值提前量随之算错（不是抖，是平滑度失准）。
+         *
+         * ⚠️ 这不是敏感信息：tick 间隔是公开的推送节奏，不含任何爆点信息。
+         *    【不能】下发的是 flightMs / 剩余飞行时长（那是答案）。
+         */
+        tickMs: CFG.TICK_MS,
         wsPort: Number(process.env.WS_PORT || 9501),
       },
     });

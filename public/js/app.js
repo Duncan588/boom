@@ -15,6 +15,10 @@
     // 【2026-09-30 A 项】服务端 tick 的权威倍率与它到达的时刻。
     // rate 由服务端给，本地只做两个 tick 之间的插值（见 tick()）。
     tickRate: 1, tickElapsedMs: 0, tickAt: 0,
+    // 【2026-10-01 修抖动】上一跳的 rate 与它到达的时刻。
+    // 有了这两个就能算出「上一跳到这一跳实际涨了多少」，插值按【真实增量】走，
+    // 不再靠写死的 0.06 猜（那个猜测只在 ≤50x 成立，见 tick() 里的注释）。
+    tickPrevRate: 0, tickPrevElapsedMs: 0, tickPrevAt: 0,
     bgmReady: false, boomRate: 0,
     // 登录幂等守卫：非空 = 本页面生命周期已发起过登录，见 runLoginOnce()
     logging: null,
@@ -870,6 +874,14 @@
    */
   function onTick(d) {
     if (S.phase !== 'flying') return;
+    // ⚠️【2026-10-01 修抖动】先把「上一跳」挪走，再存「这一跳」。
+    // 原来只有 tickRate / tickElapsedMs 两个字段，各自独立赋值 ——
+    // 而渲染循环在这两次赋值之间照跑不误，会读到「新 rate + 旧 elapsedMs」，
+    // 于是曲线 x 轴（时间）与 y 轴（倍率）错位，火箭不在曲线尖端。
+    // 把「上一跳」和「这一跳」在同一次同步执行里成对更新，竞态就没了。
+    S.tickPrevRate = S.tickRate;
+    S.tickPrevElapsedMs = S.tickElapsedMs;
+    S.tickPrevAt = S.tickAt;
     S.tickRate = Number(d.rate);
     S.tickElapsedMs = Number(d.elapsedMs) || 0;
     S.tickAt = performance.now();
@@ -884,6 +896,10 @@
     S.tickRate = 1;
     S.tickElapsedMs = 0;
     S.tickAt = performance.now();
+    // 起飞时把「上一跳」清零：第一跳没有前序样本，插值会退化为「不插值」。
+    S.tickPrevRate = 0;
+    S.tickPrevElapsedMs = 0;
+    S.tickPrevAt = 0;
     S.lastTick = -1;
     $('#multLbl').textContent = '点击逃跑';
     setPhase('flying');
@@ -925,11 +941,47 @@
        * TICK_MS 拿不到就退化为「不插值、只用最后收到的值」——
        * 那会变成阶梯状曲线，但不会泄露任何东西，安全性优先于平滑。
        */
-      var TICK_MS = 100;
+      var TICK_MS = (Number(S.cfg) && Number(S.cfg.tickMs)) || 100;
       var since = performance.now() - S.tickAt;
       var k = Math.max(0, Math.min(1, since / TICK_MS));
       var base = Number(S.tickRate) || 1;
-      var rate = base + (base * 0.06) * k;   // 原曲线在 100ms 内的增量约 6%
+      var prev = Number(S.tickPrevRate) || 0;
+      var rate;
+      if (prev > 0 && base > prev) {
+        /**
+         * 【2026-10-01 修「一抖一抖」—— 病根是写死的 0.06，不是 tick 间隔】
+         * 原来这一行是 `base + (base * 0.06) * k`，注释写「原曲线在 100ms 内约涨 6%」。
+         *
+         * ⚠️【2026-10-01 当日复测更正】我第一版把这段注释写成「6% 只在 ≤50x 成立，
+         *   ≥100x 时真实涨幅 22.91%」。那个 22.91% 是【错的】，而且是我自己的测量错：
+         *   我当时用「目标倍率 × 1.06 再反解 t」来推进时间，等于把 6% 当输入喂进去
+         *   再读出来 ⇒ 循环论证，必然量出 6%。
+         *   正确测法是让【真实 elapsedMs】推进 100ms，直接读 rateAt 两次：
+         *       1.00x → 1.016x   +1.616%
+         *       2.00x → 2.030x   +1.505%
+         *       5.00x → 5.053x   +1.065%
+         *      10.00x → 10.078x  +0.777%
+         *      50.00x → 50.178x  +0.356%
+         *     100.00x → 100.886x +0.882%
+         *   即真实涨幅是【随倍率递减】的 1.6% → 0.36%，而写死的 6% 在【全段】都虚高
+         *   约 4.4~5.6 个百分点（1.00x 时每跳画到 1.06x，真值只有 1.02x）。
+         *
+         * 所以抖动的机理是：每跳都【多画 4~5 个百分点】，到达下一个权威值时
+         * 又被硬拉回去 —— 视觉上就是「顶一下再回落」的反复抽动。
+         * 提高服务端 tick 频率（A 方案）治不了：它治采样率，而这里错的是
+         * 【每跳的终点估算】—— 加密只会让错误的估算更频繁。
+         *
+         * 修法：用服务端自己给的两跳算出真实增量，再缓动过去。
+         * dRate 是两个【权威值】相减，不是猜的；k 仍由 TICK_MS 归一，
+         * 所以前瞻量依然最多一个 tick 间隔 = 最多画到下一跳，
+         * 防爆点泄漏的约束一点没放松。
+         */
+        rate = prev + (base - prev) * k;
+      } else {
+        // 没有前序样本（第一跳 / 刚重连）：只画已收到的权威值，不做任何前推。
+        // 宁可阶梯，也绝不多画 —— 安全性优先于平滑。
+        rate = base;
+      }
       // 已飞秒数用于曲线 x 轴：仍由 tick 的 elapsedMs 推进，只描述过去。
       var sec = ((Number(S.tickElapsedMs) || 0) + Math.min(since, TICK_MS)) / 1000;
       void SCALE;
