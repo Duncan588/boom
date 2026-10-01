@@ -36,7 +36,7 @@
     this.ctx = canvas.getContext('2d');
     this.dpr = Math.min(global.devicePixelRatio || 1, 3);
     this.status = 'preview';   // preview | flying | over
-    this.samples = []; this._peakCached = 0;         // [{sec, rate}]
+    this.samples = [];         // [{sec, rate}]
     this.boom = null;
     this.scale = 2.5;          // 飞行缩放（与服务端 FLIGHT_SCALE 一致）
     this.resize();
@@ -63,15 +63,7 @@
   };
 
   BoomChart.prototype.preview = function () { this.status = 'preview'; this.draw(); };
-  BoomChart.prototype.reset = function () {
-    this.status = 'preview';
-    this.samples = [];
-    this.boom = null;
-    // ⚠️【2026-10-02】每局必须清掉上一局锁定的 yMax ——
-    //   否则新一局会沿用旧局的轴上限，几局之后曲线被压成一条平线。
-    this.yMaxLocked = 0;
-    this.draw();
-  };
+  BoomChart.prototype.reset = function () { this.status = 'preview'; this.samples = []; this.boom = null; this.draw(); };
 
   /**
    * 每帧调用。sec = 已飞行秒数（真实时间），rate = 对应倍率。
@@ -84,92 +76,18 @@
     if (st.scale) this.scale = st.scale;
     if (st.status) this.status = st.status;
     if (st.status === 'flying' || st.status === 'over') {
-      /**
-       * 【2026-10-02 修「一抖一抖」①：删掉本地公式反算】
-       *
-       * 原来这里在 while 里用本地公式补点：
-       *   rate = t/2 + (t*t-t)/10 + 1
-       * 两个问题：
-       *   ① 【与真实倍率不一致】高倍段服务端会做 ACCEL 压缩时间轴，
-       *      本地反算用的 t 与服务端实际 elapsed 对不上 ⇒ 曲线画的是一条
-       *      「假的」曲线，火箭（app.js 用 P.yFor(rate) 定位）也跟着错位。
-       *   ② 【泄漏路径】它靠「已飞时间」反推倍率，本质是客户端在预测结局。
-       *      服务端 tick 已经给了权威倍率，这里再用公式重算一遍是多余的。
-       *
-       * 现在只把服务端 tick 的 (sec, rate) 追加进来。点变稀疏是诚实的表现 ——
-       * 曲线由 100ms 的权威采样连成折线，不再有假数据填缝。
-       * 晚加入/重连的玩家本来就只有之后的 tick，曲线从当前点开始画，
-       * 这比画一条与服务端不一致的假曲线要好。
-       */
-      if (st.sec != null && st.rate != null && isFinite(st.sec) && isFinite(st.rate)) {
-        this.pushSample(st.sec, st.rate);
+      var want = Math.max(1, Math.round((st.sec * 1000) / STEP_MS));
+      while (this.samples.length < want) {
+        // 补齐中间点：用公式反算，保证曲线连续（等价原版的 flag 累加）
+        var i = this.samples.length;
+        var t = (i * STEP_MS) / 1000 / this.scale;
+        this.samples.push({ sec: i * STEP_MS / 1000, rate: t / 2 + (t * t - t) / 10 + 1 });
       }
+      if (this.samples.length > want + 2) this.samples.length = want + 2;
     }
     if (st.boom != null) this.boom = st.boom;
     this.draw();
   };
-
-  /**
-   * 追加一个服务端权威采样点。
-   * ⚠️ 同一时刻只保留最后一次：渲染循环每帧都会调 setState（60fps），
-   *    而 tick 只到 100ms 一次，所以同一个 (sec,rate) 会被送来 6 次。
-   *    靠「与最后一个点比较」去重，而不是每帧都 push —— 否则
-   *    samples 会以 6 倍速度膨胀，draw() 每帧遍历的点越来越多。
-   */
-  BoomChart.prototype.pushSample = function (sec, rate) {
-    var last = this.samples[this.samples.length - 1];
-    if (last && Math.abs(last.sec - sec) < 1e-6 && Math.abs(last.rate - rate) < 1e-9) {
-      return;                      // 同一采样点，忽略重复
-    }
-    this.samples.push({ sec: sec, rate: rate });
-    // 【2026-10-02 性能修复】增量维护历史峰值。
-    // 原来 draw() 每帧 for 循环扫全部 samples 求 max —— cap=1000 的局有 1400 个点，
-    // 60fps 下就是每秒 8.4 万次比较，而内容每 100ms 才变一次，纯属浪费。
-    if (!(this._peakCached >= rate)) this._peakCached = rate;
-    /**
-     * ⚠️⚠️【2026-10-02 修「线只跟着火箭走」】这个上限原来是 200 个点（20 秒），
-     *   而 cap=1000 的局飞行 100 秒、共 1000 个 tick ——
-     *   于是前 800 个点（80 秒）被丢掉，曲线只剩最后 20 秒。
-     *   客户看到的正是这个：「这个线会跟着火箭走」= 线只有火箭后面那一段。
-     *
-     *   ⚠️ 这个 bug 是我自己上一轮引入的：我删掉本地反算后改用服务端权威点，
-     *     但随手写了个 20 秒窗口，没核对 cap=1000 时一局能有多长。
-     *     「cap 是被上一个修复放大的」而「保留窗口没跟着放大」——
-     *     两个改动耦合在一起，只测了短局就没发现。
-     *
-     *   修法：按【整局最大时长】保留。cap=1000 → flightMs≈100s → 1000 个点。
-     *   留 1.3 倍余量，取 1400（约 140 秒），足够覆盖 cap=1000 的整局。
-     *   数量有界（1400 个点每帧遍历一次完全没问题），长局也不会无限增长。
-     */
-    var keep = Math.max(200, Math.round(140000 / STEP_MS));
-    if (this.samples.length > keep) this.samples.splice(0, this.samples.length - keep);
-  };
-
-  /**
-   * 【2026-10-02 修「火箭飞出图表外」——这是上一轮引入的连带 bug】
-   *
-   * 上一轮我加的是「起飞时锁定 yMax」，但 lockYMax() 是在 onTakeoff 里调用的，
-   * 那一刻【samples 还是空的】，于是 peak = Y_FLOOR = 4.5 ⇒ yMaxLocked = 4.68。
-   * 之后倍率涨过 4.68，yFor(rate, 4.68) 就算出负数：
-   *   rate=5x   → y=20.9px  (绘图区 39~247) ❌ 飞出上方
-   *   rate=10x  → y=−261.7px                  ❌
-   *   rate=100x → y=−5348.7px                 ❌
-   * 客户截图里火箭贴在右上角边缘，正是这条路径（截图时约 2.95x，再涨一点就出界）。
-   *
-   * 【正确的形状：只锁【下限】，不锁【上限】】
-   * 抖动来自「上限随顶端变化」—— 每帧重算 yMax 会重映射所有历史点。
-   * 但 yMax 至少要【覆盖当前 rate】，否则坐标算出来就是画布外的数。
-   * 这两件事不冲突：
-   *   · 上限取「历史最大值」—— 它只在【刷新瞬间】变一次，不在每帧变，
-   *     所以历史点的重映射从「每帧」降到「每个 tick 一次」，
-   *     而 100ms 一次的重映射在 60fps 下看不出来；
-   *   · 下限仍是 Y_FLOOR，保证小倍率局也有合理的纵向空间。
-   * 这样「锁定」保留（不再是逐帧追顶端），同时坐标永远在画布内。
-   */
-  BoomChart.prototype.lockYMax = function () {
-    this.yMaxLocked = 0;   // 0 = 尚未锁定，由 draw() 按「历史最大值」计算
-  };
-
 
   BoomChart.prototype.draw = function () {
     var ctx = this.ctx, w = this.w, h = this.h;
@@ -194,25 +112,7 @@
     // 所以坐标轴随曲线【连续平滑地长】，不是卡在 1/2/5/10 几个档位上跳变。
     // 之前用 niceCeil() 取整，视觉上轴就是"死的"。
     var xMax = Math.max(X_FLOOR, last ? last.sec : 0);
-    /**
-     * 【2026-10-02】yMax：只锁下限、不锁上限，且【每个 tick 算一次】而不是每帧。
-     *
-     * 两种抖动的来源必须分开：
-     *   ① 每帧重算（原来的 bug）⇒ 60fps 下历史点被重映射 60 次/秒 = 肉眼可见的抖
-     *   ② 上限低于当前 rate（我上一轮引入的连带 bug）⇒ yFor 算出负数，火箭飞出画布
-     *
-     * 现在：用「历史最大值」当上限，它只在【有新 tick 进来】时变化 ——
-     * 也就是 100ms 一次，而不是 60fps 一次。100ms 一次的重映射在 60fps 下看不出来。
-     * 下限仍是 Y_FLOOR。
-     */
-    var peak = Math.max(Y_FLOOR, this._peakCached || 0);
-    // 缓存：key 是「最后一个采样点的 sec+rate」，只有 tick 变了才重算
-    var sig = last ? (last.sec + '|' + last.rate) : 'empty';
-    if (this._ymaxSig !== sig) {
-      this._ymaxSig = sig;
-      this.yMaxCached = peak * 1.04;   // 一点点余量，避免贴顶
-    }
-    var yMax = this.yMaxCached || peak * 1.04;
+    var yMax = Math.max(Y_FLOOR, last ? last.rate : 0) * 1.04;   // 一点点余量，避免贴顶
 
     // 横轴跟随飞行时间连续增长：至少 10s（Y_FLOOR 同样的道理），
     // 已飞时间超过 10s 后按 0.5s 一格平滑推进，刻度标签也跟着走。

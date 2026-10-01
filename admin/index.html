@@ -390,6 +390,58 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
       </div>
 
       <!--
+        模式 10：高倍率 · 零套利（server/shaped-rate.js）
+
+        【与 mode 9 的区别 —— 一句话】
+        mode 9 的性质是「所有逃跑点的净期望完全相同」；
+        mode 10 放弃这条性质，换取更高的中位数（2.03x vs 1.80x）。
+        它仍然是零套利的：毛赔付处处 < 1.0309，任何固定逃跑点都亏。
+
+        【中位数的数学天花板 —— 2.0618x】
+        玩家固定逃 m 的净 EV = 0.97·m·P(X>m) − 1，要它为负必须 m·P(X>m) < 1.0309。
+        取 m = 中位数 M，由中位数定义 P(X>M) ≤ 0.5，代入得 M × 0.5 < 1.0309
+        ⇒ M < 2.0618x。**任何「所有逃跑点负期望」的分布都越不过这条线**，
+        与分布形状、cap、RTP 取值全都无关。
+
+        【所以「50% 的局落在 5x 以上」做不到】
+        那要求 P(X>5) ≥ 50% ⇒ 逃 5x 的净 EV = 0.97 × 2.5 − 1 = +142.5%/注，
+        玩家固定逃 5x 就稳赚。3x 起就已经是稳定暴利了。
+
+        【空房（无人下注）倍率 10–39x】
+        独立的采样器，log 域钟形分布。engine 在【封盘后、起飞前】读 bets 表的
+        投注总额，pot=0 即本局全程无人下注。两个分支的支撑集不重叠，
+        空房局不影响真人局的抽样（test/shaped-rate.js §5 有隔离断言）。
+
+        【无参数可调】
+        分布参数是静态常数（写在 server/shaped-rate.js 的 SHAPED 里），
+        后台不需要填任何东西 —— 这是刻意的：这些参数调任何一个都会破坏
+        「毛赔付处处 < 1.0309」的构造保证。
+      -->
+      <div class="panel-sub" id="w10Panel">
+        <b>高倍率 · 零套利</b>
+        <span class="hint">
+        爆点由 <code>crypto.randomBytes</code> 经逆变换采样产生，
+        <b>与在场玩家、资金池、上一局爆点全部无关</b>。<br>
+        <b>毛赔付处处低于保本线 1.0309</b>，所以任何固定逃跑点都是负期望，
+        没有稳定赚钱的区间。代价是放弃了「所有逃跑点期望相同」这条性质。<br>
+        实测（60 万局）：中位数 <b>2.03x</b>　5x 以上 <b>20.3%</b>　
+        峰值毛赔付 <b>1.0161</b>　正期望点 <b>0</b>　相邻相关系数 <b>0.001</b>。<br>
+        <b>⚠ 中位数数学上不可能超过 2.0618x</b>（由保本线与中位数定义推出），
+        所以「50% 的局落在 5x 以上」在保证玩家不亏的前提下无法实现。<br>
+        <b>空房（无人下注）</b>走独立分支，倍率固定落在 <b>10–39x</b>，
+        与真人局的分布完全隔离。
+        </span>
+      </div>
+      <div id="w10Body">
+        <div class="hint" style="padding:8px;border-left:3px solid var(--warn);color:var(--warn)">
+          <b>本模式没有可调参数</b>，分布系数是代码里的静态常数。
+          这是刻意的：任何一个参数改动都可能破坏「毛赔付处处低于保本线」这条构造保证。
+          需要调整分布形状必须改 <code>server/shaped-rate.js</code> 的 <code>SHAPED</code>，
+          并重跑 <code>node test/shaped-rate.js</code> 验收。
+        </div>
+      </div>
+
+      <!--
         模式 7：Jev 做庄（TypeSafe System One / jev-1.13）。
 
         【它做什么】起飞时刻把在场玩家的阈值发给 Jev，它选一个倍率段
@@ -1304,6 +1356,18 @@ function w6Preview(){
   if (on9) w9Preview();
 
   /**
+   * 【mode 10 / 高倍率零套利面板显隐】和 w7/w8/w9 同一个套路。
+   * ⚠️ panel-sub 与 body 必须【两个都】显隐 —— 只改一个会出现
+   *    「有标题没内容」或反过来，这是 w6 当年同一个坑。
+   * 本模式没有可调参数，所以没有预览要算。
+   */
+  var on10 = mode === '10';
+  var p10 = document.getElementById('w10Panel');
+  if (p10) p10.style.display = on10 ? '' : 'none';
+  var b10 = document.getElementById('w10Body');
+  if (b10) b10.style.display = on10 ? '' : 'none';
+
+  /**
    * ⚠️ 这里【不能】在页面加载时就把按钮藏掉。
    * w6Preview() 在 loadSettings() 之后就会被调用，而那时 s_mode 还是
    * 数据库里的旧值（5），on=false → 按钮被 display:none。
@@ -1433,7 +1497,11 @@ $('#s_mode').onchange = function(){
   }
   call('/admin/api/settings', body).then(function(r){
     if (r && r.error) { toast('保存失败：' + r.error, 'err'); return; }
-    toast('已切换到' + (mode === '6' ? '百分比分布表' : mode === '7' ? 'Jev 做庄' : '模式 ' + mode) + '，下一局生效', 'ok');
+    // ⚠️ 模式名必须在这里维护。加了新模式而忘了加这个映射，
+    //    toast 会显示「已切换到模式 10」——运营看不懂那是什么。
+    var NAME = { '6':'百分比分布表', '7':'Jev 做庄', '8':'老虎机',
+                 '9':'幂律 · 恒定期望', '10':'高倍率 · 零套利' };
+    toast('已切换到' + (NAME[mode] || ('模式 ' + mode)) + '，下一局生效', 'ok');
   });
 };
 

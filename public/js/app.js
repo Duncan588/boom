@@ -901,10 +901,6 @@
     S.tickPrevElapsedMs = 0;
     S.tickPrevAt = 0;
     S.lastTick = -1;
-    // ⚠️【2026-10-02 修「一抖一抖」②】起飞这一刻锁定 y 轴上限。
-    //   必须在第一个 tick 绘制【之前】锁定，否则第一帧会用旧算法算出
-    //   一个 yMax，紧接着又被锁定值替换 ⇒ 第一帧仍然跳一次。
-    if (chart && typeof chart.lockYMax === 'function') chart.lockYMax();
     $('#multLbl').textContent = '点击逃跑';
     setPhase('flying');
     setBetBtn();

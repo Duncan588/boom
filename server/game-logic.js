@@ -13,6 +13,8 @@
  */
 
 const crypto = require('crypto');
+// mode 10（零套利高倍率 + 空房独立区间）。纯计算、无网络、无模型调用。
+const { shapedDecide } = require('./shaped-rate');
 
 const CFG = {
   BET_MS: 10000,         // 下单阶段（用户要求 10 秒）
@@ -449,11 +451,35 @@ function round4(n) { return Math.round(n * 10000) / 10000; }
  * @returns {{rate: number, mode: string, powerlaw: object}}
  */
 function decideRate(cfg, pot, pool, event, ctx) {
+  const ev = event && typeof event === 'object' ? event : null;
+  const p = Number(pot) || 0;
+
+  /**
+   * 【mode 10：零套利高倍率引擎 + 空房独立区间】
+   *
+   * ⚠️ 这里【读 pot】是 mode 10 唯一一次读房间状态，而且是有理由的：
+   *   客户要求「没人下单时倍率 10–39x」，所以 pot=0 必须走另一条分支。
+   *   这与幂律「读都不读 pot」的原则相反，但两者服务的目标不同：
+   *     · 幂律要防的是「同一个人在同一房间反复玩 ⇒ 分布不变」
+   *     · mode 10 要的是「空房时的展示形态可控」
+   *   隔离由三点保证（test/shaped-rate.js §5 有断言）：
+   *     ① 分布不同：空房 ⊆ [10,39]，真人局 ∈ [1,1000]，支撑集不重叠
+   *     ② 顺序无关：空房局不影响真人局的抽样（两个独立采样器）
+   *     ③ 结构不同：mode 字符串不同，engine 可据此决定是否落库
+   *
+   * ⚠️ 何时算「空房」：engine 在【封盘后、起飞前】调 decideRate，
+   *   此时 pot 来自 bets 表求和。有下注的局一定是真人局，
+   *   玩家下单之后引擎才读 pot —— 所以 pot=0 ⇔ 本局全程无人下注。
+   */
+  if (String(cfg.odds_mode) === '10') {
+    return shapedDecide(cfg, p <= 0);
+  }
+
   // pot / pool / ctx 是历史签名，engine.js 按位置传 5 个参数。
   // 这里【读都不读】—— 读它们就让分布耦合到房间状态上。
   // 保留位置是为了让 engine.js 一行不用改（它不是我负责的文件）。
-  void pot; void pool; void ctx;
-  return powerlawDecide(cfg, event && typeof event === 'object' ? event : null);
+  void p; void pool; void ctx;
+  return powerlawDecide(cfg, ev);
 }
 
 
@@ -635,4 +661,5 @@ module.exports = {
   flightMs, rateAt, decideRate, activeEvent, payout, round2, sleep,
   toMinutes, beijingParts, simulate,
   powerlawRate, powerlawDecide, powerlawReport, normRtp, normCap, normEventBonus, POWERLAW,
+  shapedDecide,
 };
