@@ -36,7 +36,7 @@
     this.ctx = canvas.getContext('2d');
     this.dpr = Math.min(global.devicePixelRatio || 1, 3);
     this.status = 'preview';   // preview | flying | over
-    this.samples = [];         // [{sec, rate}]
+    this.samples = []; this._peakCached = 0;         // [{sec, rate}]
     this.boom = null;
     this.scale = 2.5;          // 飞行缩放（与服务端 FLIGHT_SCALE 一致）
     this.resize();
@@ -118,58 +118,14 @@
    */
   BoomChart.prototype.pushSample = function (sec, rate) {
     var last = this.samples[this.samples.length - 1];
-
-    /**
-     * ⚠️⚠️⚠️【2026-10-02 真根因：每帧都塞点，samples 以 6 倍速膨胀】
-     *
-     * 客户说「线只跟着火箭走」「0~6 秒是空的」「曲线问题严重」。
-     * 我前面两次都改错了地方（先怪本地反算、再怪 keep=1400 太大），
-     * 真因是【采样粒度】：
-     *
-     * app.js 的渲染循环每帧（60fps）都调 setState()，且 sec 是【插值出来的】
-     * —— 每帧都不同。而 pushSample 原来只丢弃「sec 和 rate 都完全相同」的重复，
-     * 而插值让 sec 每帧都在变 ⇒ 【永远命中不了去重】⇒ 每个 tick 塞进 6 个点。
-     *
-     * 实测（真实 setState 路径，60fps × 100ms tick）：
-     *   10 秒局  100 tick → 600 个点  (6.00 倍)
-     *   30 秒局  300 tick → 1400 个点 (撞上 keep 上限) ⇒ samples[0].sec = 6.77s
-     *   100 秒局 1000 tick → 1400 个点 (撞上限)      ⇒ samples[0].sec = 76.77s
-     * 那个 6.77s 就是客户截图里「0~6 秒区域是空的」。
-     *
-     * ⚠️ 为什么之前没发现：我上轮只改了 keep（1400），而 keep 只是【上限】，
-     *   真正的问题是【填充速度是 tick 的 6 倍】。上限放大到 1400 反而让
-     *   曲线看起来「有 1400 个点很充实」，掩盖了它其实是每帧的插值碎片。
-     *
-     * 【修法：只保留「每个 100ms 桶的最后一个点」，即 1 个采样点 = 1 个 tick】
-     *   · 同一桶内的新点【覆盖】最后一个点，而不是 append ——
-     *     插值在 k→1 时 rate 恰好等于服务端权威值，所以桶尾就是权威值，
-     *     覆盖写天然保留权威值、丢掉桶中间的插值碎片；
-     *   · 于是 samples 长度 = tick 数：10 秒局 100 点、100 秒局 1000 点，
-     *     既不膨胀也不截断（1000 ≤ 1400），②③ 两个症状一起消失。
-     *
-     * ⚠️ 安全性不变：仍然只画【已经收到的】tick，绝不外推。
-     */
-    var STEP_SEC = STEP_MS / 1000;
-    if (last && sec - last.sec < STEP_SEC * 0.9) {
-      /**
-       * ⚠️【2026-10-02 我自己引入的连带 bug，第一次实现就踩了】
-       * 同一桶内我写成「rate 更大 或 sec 更大 就覆盖」。错在两个条件用【或】：
-       *   · 每帧 sec 都在涨 ⇒ 第二个条件【恒为真】⇒ 每帧都覆盖；
-       *   · 于是整局只留下【最后一个】点（实测 samples.length = 1，
-       *     samples[0].sec = 10.083s —— 曲线只剩火箭脚下一个点）。
-       * 条件必须【与】：只有 sec 和 rate【同时】前进才覆盖桶尾，
-       * 否则插值中途的帧不动它。到 tick 边界时两者一起到位 ⇒ 只覆盖一次。
-       */
-      if (rate > last.rate && sec > last.sec) {
-        last.sec = sec;
-        last.rate = rate;
-      }
-      return;
-    }
-    if (last && Math.abs(last.sec - sec) < 1e-9 && Math.abs(last.rate - rate) < 1e-12) {
-      return;                      // 完全重复，忽略
+    if (last && Math.abs(last.sec - sec) < 1e-6 && Math.abs(last.rate - rate) < 1e-9) {
+      return;                      // 同一采样点，忽略重复
     }
     this.samples.push({ sec: sec, rate: rate });
+    // 【2026-10-02 性能修复】增量维护历史峰值。
+    // 原来 draw() 每帧 for 循环扫全部 samples 求 max —— cap=1000 的局有 1400 个点，
+    // 60fps 下就是每秒 8.4 万次比较，而内容每 100ms 才变一次，纯属浪费。
+    if (!(this._peakCached >= rate)) this._peakCached = rate;
     /**
      * ⚠️⚠️【2026-10-02 修「线只跟着火箭走」】这个上限原来是 200 个点（20 秒），
      *   而 cap=1000 的局飞行 100 秒、共 1000 个 tick ——
@@ -249,10 +205,7 @@
      * 也就是 100ms 一次，而不是 60fps 一次。100ms 一次的重映射在 60fps 下看不出来。
      * 下限仍是 Y_FLOOR。
      */
-    var peak = Y_FLOOR;
-    for (var i = 0; i < S.length; i++) {
-      if (S[i].rate > peak) peak = S[i].rate;
-    }
+    var peak = Math.max(Y_FLOOR, this._peakCached || 0);
     // 缓存：key 是「最后一个采样点的 sec+rate」，只有 tick 变了才重算
     var sig = last ? (last.sec + '|' + last.rate) : 'empty';
     if (this._ymaxSig !== sig) {
