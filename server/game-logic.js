@@ -6,14 +6,8 @@
  * 闭式反解：  t = (√(40·rate − 24) − 4) / 2
  *   原实现 getBDTime() 用最多 10 万次迭代逼近，此处改用闭式解，1.00~1000x 全区间精确。
  *
- * 爆点计算还原原版四种模式（admin 可调）：
- *   1 = 赢    爆点 = (资金池 − 设定值) / 总投注
- *   2 = 输    爆点 = (设定值 + 资金池) / 总投注
- *   3 = 平衡  爆点 = (资金池 + 总投注) × (1−抽水) / 总投注
- *   4 = 区间  在 [下限, 上限] 之间均匀随机
- *   5 = 加权  三段加权分布（低倍率占大头，高倍率稀有）—— 2026-09 新增
- * 池子不够时走「立即结算」：全部判负，爆点压到 1.00~1.20x
- *
+ * 爆点分布：单一幂律引擎（无状态、单次抽样、不读任何房间状态）。
+ *   X = min(cap, max(1.00, floor₂(RTP / U)))，U 来自 CSPRNG（crypto.randomBytes）。
  * 无论哪种模式，爆点都受 min_rate 下限保护（默认 1.10x），
  * 保证玩家至少有逃跑窗口。
  */
@@ -247,8 +241,10 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
  *    test/odds-powerlaw.js §2 用仿真（不是闭式）独立验证 ②，
  *    就是为了让这个减法出错时被抓住，而不是靠注释提醒。
  *
- * 数值（默认 RTP=0.97，payout() 抽水 3%）：EV = 0.97·0.97 − 1 = **−0.0591**
- * 也就是说玩家每注期望亏 5.91%，与逃到哪里无关。
+ * 数值（默认 RTP=1.00，payout() 抽水 3%）：EV = 0.97·1.00 − 1 = **−0.0300**
+ * 也就是说玩家每注期望亏 3.00%，与逃到哪里无关 —— 精确等于 Aviator/JetX。
+ * ⚠️ 别把 powerlaw_rtp 当成对外 RTP：0.97 那个数在两层抽水下等价于 94.09%，
+ *    详见 RTP_DEFAULT 的注释。
  *
  * 【为什么必须用 crypto 而不是 Math.random】
  * Math.random() 是可预测的（V8 用 xorshift128+，观察输出即可恢复内部状态），
@@ -256,26 +252,46 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
  * crypto.randomBytes 走 OS 的 CSPRNG，观察输出无法恢复内部状态。
  *
  * 【瞬爆概率不再单独设置】
- * 由公式自然产生：X ≤ 1.00 当且仅当 RTP/U < 2，即 U > RTP/2，
- * 概率 = 1 − RTP/2·... 实测 ≈ 1 − RTP（3.9% @ RTP=0.97）。
+ * 精确式是 1 − RTP/1.01 而不是 1 − RTP —— 因为 floor₂ 让 X ≤ 1.00 的条件是
+ * RTP/U < 1.01（不是 < 1），而 < 1 的那一小段也被 max(1,·) 兜到 1.00。
+ * RTP=1.00 时实测 0.99%，理论 1 − 1/1.01 = 0.99%。
  * 所以不需要「瞬爆段」这种额外旋钮，也就没有「配了瞬爆段」和
  * 「瞬爆率对不上」两个新问题。
  */
 const POWERLAW = {
   /**
-   * 【2026-10-01 改】默认 RTP 0.97 → 0.87。
+   * 【2026-10-01 定稿】默认 RTP = 1.00。
    *
-   * 为什么换：0.97 时净期望 = 0.97×0.97 − 1 = −5.91%，庄家优势过大，
-   * 而且 1.00 的硬上限只剩 3 个百分点活动空间 —— 不够一次像样的活动加成。
+   * ⚠️⚠️ 为什么是 1.00 而不是「看起来更严谨」的 0.97 —— 这是口径问题，不是偏好。
    *
-   * ⚠️ 【语义澄清】0.87 的净期望 = 0.97×0.87 − 1 = −15.61%/注，是很大的数字。
-   * 它【不是】玩家体感：玩家看到的是中位数 1.74x、瞬爆 13.0%、<1.10x 占 20.9%。
-   * 后台「净期望」那一栏显示的就是这个 −15.61%，别把它误读成「玩一局就亏 15%」。
+   * payout() 里写死了 CFG.HOUSE_EDGE = 0.03，逃跑派奖是 stake·c·0.97。
+   * 所以 powerlaw_rtp 是【在 3% 抽水之上再乘一层】：
+   *     玩家每注 EV = 0.97 × powerlaw_rtp − 1
+   *     庄家总优势   = 1 − 0.97 × powerlaw_rtp
    *
-   * ⚠️ 这是运营默认值，不是数学护栏。RTP_MIN/RTP_MAX 不动（那是数学红线），
-   * 运营仍可在后台把 RTP 配回 0.97，面板范围仍是 0.80–1.00。
+   * 行业口径的「RTP 97%」= 玩家投入的 97% 被返还 = 庄家优势 3%，
+   * 而那 3% 正是行业公式 crash_point = max(1, floor(E/(1−h))) 里的 E=0.97。
+   * 行业只有【一层】抽水，本项目有两层，所以：
+   *
+   *     powerlaw_rtp   庄家总优势   行业等价 RTP
+   *        0.87          15.61%        84.39%   ← 比行业最差配置（5%）还狠 3 倍
+   *        0.95           7.85%        92.15%
+   *        0.97           5.91%        94.09%   ← 仍低于行业最低的 95.5%
+   *        1.00           3.00%        97.00%   ← 精确等于 Aviator / JetX
+   *
+   * 配 1.00 的体感也同时更松，三项全部优于 0.97：
+   *     瞬爆 ≤1.00x   3.94% → 0.99%
+   *     <1.10x 按不到按钮  11.78% → 9.10%
+   *     玩家每注 EV   −5.91% → −3.00%
+   *
+   * ⚠️ 代价：RTP_MAX 硬上限也是 1.00，所以 base=1.00 时活动加成
+   *   （min(1.00, 1.00+0.03) = 1.00）自动失效。这是安全的 ——
+   *   活动从此不能提高返还率，@运营与社区 的活动文案不能再写「活动期间更容易赢」。
+   *   要保留活动空间就把后台 powerlaw_rtp 调到 0.97 或以下（后台可配，随时能改）。
+   *
+   * 这是运营默认值，不是数学护栏。RTP_MIN/RTP_MAX 才是护栏，不动。
    */
-  RTP_DEFAULT: 0.87,
+  RTP_DEFAULT: 1.00,
   RTP_MIN: 0.80,
   /**
    * ⚠️ RTP 硬上限 1.00。超过 1.00 玩家就是正期望，长期必然赢。
@@ -399,425 +415,46 @@ function powerlawDecide(cfg, event) {
 
 function round4(n) { return Math.round(n * 10000) / 10000; }
 
+
 /**
- * 根据 admin 配置计算本局爆点。
- * @param {object} cfg  游戏参数（来自 db.allSettings()）
- * @param {number} pot  本局总投注
- * @param {number} pool 后台资金池
- * @param {object|null} event 命中的限时活动（无则 null）
- * @param {object|null} ctx  【mode 7 新增】房间上下文 { seated:[{ar,thr,lossStreak}], lastBoom, act }
- *   前六个模式不使用它，保持原调用方式不变（ctx 省略即行为不变）。
+ * 决定本局爆点。**这是本项目唯一参与定价的函数。**
+ *
+ * 【性质，四条，全部可被脚本验证】
+ *   ① 纯函数、无状态、单次抽样、无记忆 —— 不读 pot / pool / ctx / seated /
+ *      上一局爆点。任何对房间状态的依赖都会让「房间不变 → 分布不变」，
+ *      重新制造一个稳定可套利的区间。
+ *   ② 随机源只用 crypto.randomBytes。Math.random() 是 V8 的 xorshift128+，
+ *      观察输出即可恢复内部状态 —— 一条能被反推的伪随机序列就是一套可套利的固定序列。
+ *   ③ 对任意逃跑目标 m（m ≤ cap）：P(X ≥ m) = RTP / m，于是毛赔付恒等于 RTP，
+ *      净期望 EV(m) = 0.97·RTP − 1 与 m 完全无关 ⇒ 不存在最优逃跑点。
+ *   ④ 无人下注（pot=0）也照常抽样。历史上这里有一条「无下注 → 均匀 1.10–2.00」
+ *      的早退，任何 odds_mode 都改不动它，深夜空房间就成了一条稳定套利通道。
+ *
+ * 【参数只有两个】
+ *   powerlaw_rtp  返还率，0.80–1.00，硬上限 1.00（超过 1.00 玩家就是正期望）
+ *   powerlaw_cap  倍率上限，默认 1000（只截尾；c ≤ cap 区间内 ③ 精确成立）
+ *
+ * ⚠️ min_rate / max_rate / 限时段 / 分布表 / 加权段 / Jev 选段 / 老虎机
+ *    全部已删除。它们的共同问题不是参数不对，而是分布里存在「期望更高」的
+ *    区间，玩家固定在那个倍率逃跑就能长期获利 —— 而发现它不需要看懂任何规律，
+ *    只要记住一个数字。（实测：旧五段加权下 1.10x–20x 之间每一个固定逃跑点
+ *    都是 9σ–25σ 的正期望，逃 2.00x 每注 +50%。）
+ *
+ * @param {object} cfg    settings 快照（db.allSettings()）
+ * @param {number} pot    【历史参数·已不读】本局总投注
+ * @param {number} pool   【历史参数·已不读】后台资金池
+ * @param {object|null} event 命中的限时活动（无则 null）—— 只用来加 RTP，不换引擎
+ * @param {object|null} ctx   【历史参数·已不读】房间上下文（seated / lastBoom）
+ * @returns {{rate: number, mode: string, powerlaw: object}}
  */
 function decideRate(cfg, pot, pool, event, ctx) {
-  const min = Number(cfg.min_rate) || CFG.MIN_RATE;
-  const max = Number(cfg.max_rate) || CFG.MAX_RATE;
-  const mode = String(cfg.odds_mode ?? '4');
-  const setValue = Number(cfg.odds_value) || 0;
-  const percent = Math.max(0, Math.min(1, Number(cfg.rake_percent) || 0));
-  const jitter = Math.random() * 0.09;
-
-  const clamp = (r) => {
-    let v = Number(r);
-    if (!isFinite(v) || v < min) v = min;
-    if (v > max) v = max;
-    return round2(v);
-  };
-
-  /**
-   * 限时活动优先：直接在该活动的倍率区间内取。
-   *
-   * 【2026-09-30 修：活动倍率不能被后台 max_rate 砍掉】
-   *
-   * 原来这里走的是 clamp()，而 clamp 用的是 cfg.min_rate / cfg.max_rate
-   * —— 那对护栏是给日常分布表用的。后果：后台 max_rate=125 时，
-   * 活动里配的 min=20 / max=1000 被压成【全部 125x】，
-   * 活动配置写什么都没用。用户反馈「配了 20x-1000x 但没生效」就是这个。
-   *
-   * 修法：活动倍率只保下限（不能低于 min_rate，否则玩家连反应都来不及），
-   * 上限由活动自己的 max 决定 —— 运营显式配的高倍时段不该被日常护栏截断。
-   */
-  if (event) {
-    /**
-     * 【2026-09-30 重写：活动改走老虎机引擎 v3】
-     *
-     * 原来这里是一次性算出一个固定的 event.rate 就返回 —— 整个活动时段
-     * 同一个倍率，玩家看到的是「一整小时都爆在 23.4x」。这既不是活动该有的
-     * 体验，也让 events_json 里的 min/max/weight 三个字段实际只被用了一次。
-     *
-     * 现在：活动的 min/max 作为倍率【范围】，boom_rate 作为瞬爆概率，
-     * 每局由 v3 引擎独立抽取 —— 活动期同样有起伏，且瞬爆率可控。
-     * v3 是纯本地算法，零 API 成本。
-     *
-     * ⚠️【2026-09-30 mode 9 例外】幂律模式下本分支【不执行】。
-     *    v3 的随机游走与幂律是完全不同的分布形状：活动期会突然换成另一个游戏，
-     *    玩家只要玩过一次活动时段就能识别出「这段时间的爆点不一样」——
-     *    这正是幂律下活动只调 RTP（不改 min/max、不换引擎）的原因。
-     */
-    if (mode === '9') {
-      return powerlawDecide(cfg, event);   // 只加 RTP，分布形状不变
-    }
-    const ev = require('./v3/engine');
-    const d = ev.rollRange({
-      min: Math.max(min, Number(event.min) || 1),
-      max: Number(event.max) || 1000,
-      boomRate: event.boom_rate,
-      width: event.width,
-    });
-    return {
-      rate: d.rate, fast: false,
-      mode: 'event-v3:' + (event.name || ''),
-      event: { boom: d.boom, center: d.center },
-    };
-  }
-
-  /**
-   * 模式 9：幂律（恒定期望）。**必须在空注早退【之上】。**
-   *
-   * 【为什么位置这么关键 —— 这是本模式最重要的一行代码】
-   * 下面有一句 `if (!pot || pot <= 0) return {rate: min + Math.random()*0.9}`，
-   * 它位于【所有 mode 分支之上】。后果是：无人下注的时段根本到不了 mode 9，
-   * 分布变成一个【固定形状的均匀分布 1.10–2.00】，逃 1.11x 的赢面 89%、
-   * EV +0.076/注 —— 深夜 Discord 无人时这是个稳定可套利的区间。
-   * 实测确认：pot=0 时 decideRate 返回 mode='base'，任何 odds_mode 都改不动它。
-   *
-   * 所以幂律分支放在这里：所有局都吃幂律，【无人下注也照常抽】。
-   * 无人局的爆点照常落库 + 广播（engine 里不再因 pot=0 跳过），
-   * 保证公开的爆点历史与真实分布一致 —— 否则历史曲线自己就是一个可辨识信号。
-   *
-   * 【去耦合：这里【不读】 pot / pool / ctx / seated / lastBoom】
-   * 爆点只由 CSPRNG 决定。任何对玩家状态、资金池、上一局爆点的依赖，
-   * 都会让「房间不变 → 分布不变」，重新制造可套利区间。
-   * pool 仍是后台监控指标（engine 照常累计与展示），但不参与定价。
-   */
-  if (mode === '9') {
-    return powerlawDecide(cfg, null);
-  }
-
-  // 无下注 → 保底区间随机
-  if (!pot || pot <= 0) {
-    const base = min + Math.random() * (Number(cfg.base_random) || 0.9);
-    return { rate: clamp(base), fast: false, mode: 'base' };
-  }
-
-  let rate = null;
-
-  if (mode === '1') {
-    if (pool > setValue + pot) rate = Math.round((pool - setValue) / pot) - jitter;
-    else return { rate: clamp(1.00 + Math.random() * 0.20), fast: true, mode: 'win-fast' };
-  } else if (mode === '2') {
-    if (pool + setValue - pot * 1.5 > 0) rate = Math.round((setValue + pool) / pot) - jitter;
-    else return { rate: clamp(1.00 + Math.random() * 0.20), fast: true, mode: 'lose-fast' };
-  } else if (mode === '3') {
-    const effPool = (pool + pot) * (1 - percent);
-    if (pool > 0) rate = Math.round(effPool / pot) - jitter;
-    else return { rate: clamp(1.00 + Math.random() * 0.20), fast: true, mode: 'balance-fast' };
-  } else if (mode === '4') {
-    const lo = Number(cfg.band_min) || 1.10;
-    const hi = Math.max(lo, Number(cfg.band_max) || 3.00);
-    rate = lo + Math.random() * (hi - lo);
-  } else if (mode === '5') {
-    const w = weightedRate(cfg);
-    // 只有「瞬爆段」才绕过 min_rate 下限保护 —— 它的全部意义就是不给逃跑窗口。
-    // 走正常 clamp 会被 min_rate 顶回去，玩家照样能等到下限逃跑，瞬爆就名存实亡。
-    //
-    // ⚠️ 必须用 weightedRate 返回的 boom 标记，不能用「r < min」反推：
-    // 低段下限（1.01）也可能低于 min_rate，那是正常低倍率局，不该被当成瞬爆。
-    if (w.boom) return { rate: round2(w.v), fast: true, mode: '5-instant' };
-    rate = w.v;
-  } else if (mode === '6') {
-    const t = tableRate(cfg);
-    if (!t) return { rate: clamp(min + Math.random() * 0.9), fast: false, mode: '6-fallback' };
-    /**
-     * 【2026-09-30】不再有「瞬爆勾选」。
-     * 原版低倍率局本来就飞得极短（1.0x → 0ms），没有下限保护；
-     * 我之前加的 MIN_FLIGHT_MS=2500 保底把那个行为抹平了，
-     * 才不得不引入 boom 标记去绕过。保底已删，boom 一并去掉。
-     *
-     * 现在「瞬爆」不是一个配置项，而是【下界填多少】的自然结果：
-     * 下界 1.00 → 0ms（刚起飞就炸）
-     * 下界 1.50 → 2500ms
-     */
-    rate = t.v;
-  } else if (mode === '7') {
-    /**
-     * 【2026-09-30 新增】Jev 做庄模式。
-     *
-     * 爆点仍然【只有一个】，全场共享同一条 rateAt 曲线 —— 与前六个模式完全一致，
-     * 不引入任何按人差异化的东西。Jev 只决定这一局落在哪个倍率段，
-     * 段内取多少倍率由 Math.random() 完成。
-     *
-     * 分段边界贴着在场玩家的逃跑阈值分位数自适应（见 server/jev-bands.js），
-     * 所以后台那张百分比表在 mode 7 下不参与选段，只作为降级基线与后台预览对照。
-     *
-     * ctx 形如 { seated:[{ar,thr,lossStreak}], lastBoom }，由 engine 传入。
-     * 缺 ctx 或无人 → 直接退回表驱动，绝不在空房间调用外部 API。
-     *
-     * ⚠️ 命中限时活动时【不会走到这里】—— 函数开头就有
-     *    `if (event) return { rate: ev.rate }` 的早退（见上），活动倍率由
-     *    activeEvent() 算好后原样透传。所以「活动时段切菩萨人格」在当前
-     *    架构下无法实现：活动分支把 Jev 整个绕过去了。
-     *    早先我为此另建 jev_act_* 四个 setting 试图绕过，结果与 events_json
-     *    构成两套活动上限、谁生效说不清，且那个 roundsLeft 扣减机制还引入了
-     *    「一局扣两次」的真 bug。已全部删除。
-     */
-    const seated = ctx && Array.isArray(ctx.seated) ? ctx.seated.filter((p) => p && isFinite(p.thr)) : [];
-    if (!seated.length) {
-      const t = tableRate(cfg);
-      return { rate: t ? round2(t.v) : clamp(min + Math.random() * 0.9), fast: false, mode: '7-fallback' };
-    }
-    const jev = require('./jev');
-    const pick = jev.pickBand(seated, ctx.lastBoom ?? null, null);
-    return { rate: pick.rate, fast: false, mode: '7-jev', jev: { band: pick.band, source: pick.source, confidence: pick.confidence } };
-
-  } else if (mode === '8') {
-    /**
-     * 【2026-09-30 新增】老虎机算法（v3）—— 日常模式的零成本选项。
-     *
-     * 【它和 mode 7 的区别】
-     *   mode 7 (Jev)  每一局可能调用一次外部 AI（约 $0.17/局），由 AI 选倍率段。
-     *   mode 8 (v3)   纯本地随机游走，零 API 成本，行为完全可预测地稳定。
-     *
-     * 【为什么数字不可推算 —— 三个叠加的随机源】
-     *   ① 瞬爆：每局独立掷骰，与历史完全无关
-     *   ② 中心游走：在 log 空间按「档位」上/下走一格（每格 ×3.16），
-     *      跳变概率随停留时间上升但封顶 0.55
-     *   ③ 采样：在中心邻域内对数均匀
-     *   三者叠加后相邻局差、连续相同值、间隔节奏都没有可观察的内部结构。
-     *
-     * 【为什么不做「连着 6 局不许重复」】
-     *   Provably fair crash 游戏（Stake/Aviator）和老虎机认证标准（GLI-11）
-     *   都【明确不】在单局层面过滤结果 —— 过滤掉的痕迹本身就是新模式，
-     *   玩家观察几轮就能推出「上一局 100x → 这局必然不是 100x」。
-     *   行业做法是让分布自己在时间上漂移，也就是这里的中心游走。
-     *
-     * 爆点仍然只有一个、全场共享同一条 rateAt 曲线，不做任何按人差异化。
-     * 无人下注时同样不消耗任何东西（v3 是纯本地算法，没有 API 调用）。
-     */
-    const v3 = require('./v3/engine');
-    // 后台存的是「百分比」字符串（便于运营填 10 表示 10%），
-    // 这里统一转成 0–1。留空 → undefined → 引擎用默认 10%。
-    /**
-     * ⚠️ 留空必须落到【引擎默认值】，不能落到 0。
-     *    留空 =「没配」≠「配成 0%」—— 后者会让运营以为设了瞬爆却一局都不爆
-     *    （这个 bug 实测踩过：slot_boom_rate 留空 → 瞬爆 0%）。
-     *
-     * 三项的语义和量级都不同，不能用同一个解析函数：
-     *   boom_rate  后台填百分比（10 = 10%）→ 引擎要 0–1
-     *   width      直接是倍数（2.5 = ±2.5 倍），不是百分比
-     *   jump_rate  直接是 0–1 的概率（0.5 = 50%）
-     */
-
-    // ⚠️ 默认值【已经是 0–1 的概率】，不能再除100 ——
-    //   早先写成 num(cfg, 0.10) / 100 = 0.001，瞬爆率被压到 0.1%。
-    //   这里分两段：先取「原始值」（后台是百分比），再统一归一化到 0–1。
-    const SLOT_DEFAULTS = { boomPct: 10, width: 2.5, jumpRate: 0.5 };
-    const num = (v, def) => {
-      if (v === undefined || v === null || v === '') return def;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : def;
-    };
-    const boomRate = Math.max(0, Math.min(1, num(cfg.slot_boom_rate, SLOT_DEFAULTS.boomPct) / 100));
-    const d = v3.rollRange({
-      min: Math.max(min, 1),
-      max: max,
-      boomRate,
-      width: Math.max(1.05, num(cfg.slot_width, SLOT_DEFAULTS.width)),
-      jumpRate: Math.max(0, Math.min(1, num(cfg.slot_jump_rate, SLOT_DEFAULTS.jumpRate))),
-    });
-    return {
-      rate: d.rate, fast: false,
-      mode: '8-slot',
-      event: { boom: d.boom, center: d.center },
-    };
-  }
-
-  /**
-   * 【2026-09-30】模式 6 不再走 clamp()。
-   *
-   * 原来所有模式最后都 `return { rate: clamp(rate) }`，
-   * 而 clamp 用的是后台 min_rate / max_rate 那对护栏。
-   * 后果：用户手填的区间下界被【静默改写】——
-   *   填 1.5–10x、后台 min_rate=1.01 → 实际从 1.01 开始取（等于 1.01–10x）
-   *   填 20–30x       → 实际从 1.01 开始取，80% 的局掉进 1.5–20x
-   * 「三列都手填」这个需求等于没实现。
-   *
-   * 与限时活动同一个毛病（活动被 max_rate 砍成 125x），
-   * 根子都是「用户配的区间不该被后台护栏改写」。
-   *
-   * 护栏仍然存在，但只作为【兜底】：配置本身合法时不再干涉，
-   * 避免 clamp 把用户填的区间边界改掉。
-   */
-  if (mode === '6') {
-    // tableRate 已保证 min < max 且 min ≥ 0.01，这里只防数值异常
-    const v = Number(rate);
-    return { rate: isFinite(v) && v > 0 ? round2(v) : clamp(min), fast: false, mode };
-  }
-
-  return { rate: clamp(rate), fast: false, mode };
+  // pot / pool / ctx 是历史签名，engine.js 按位置传 5 个参数。
+  // 这里【读都不读】—— 读它们就让分布耦合到房间状态上。
+  // 保留位置是为了让 engine.js 一行不用改（它不是我负责的文件）。
+  void pot; void pool; void ctx;
+  return powerlawDecide(cfg, event && typeof event === 'object' ? event : null);
 }
 
-/**
- * 模式 5：加权分布。
- *
- * 为什么需要它：模式 4 是「下限 + random × (上限−下限)」的【均匀分布】，
- * 意味着 1.1x 和 50x 出现概率完全相同。线上曾把 band 配成 1.1–50，
- * 结果 81.8% 的局超过 10x、41% 超过 30x（实测 10 万局模拟），
- * 玩家每局都在 25x 附近逃跑，10 局净赚 5 倍本金 —— 赢率离谱地高。
- *
- * 均匀分布不适合「偶尔来一发大的、平时小赢」的手感。
- * 模式 5 改成五段加权：
- *   1) 按权重决定落在哪一段（低倍率占大头，高倍率稀有）
- *   2) 段内再均匀取值
- * 于是低倍率被大幅加权，高倍率稀有但存在。
- *
- * 默认参数（50 万局模拟）：
- *   瞬爆  6% → 1.00–1.01x   刚起飞就没，绕过 min_rate 与最低飞行时长
- *   低段 50% → 1.01–4.00x   日常区间
- *   中段 22% → 4.00–10.00x
- *   高段 20% → 10.00–30.00x 约 22 局来一次
- *   爆段  2% → 30.00–50.00x 约 50 局来一次
- *
- * 玩家视角：日常 1.01–10x，偶尔冲到 30x+，50x 是稀有事件。
- * 想要更稳就把 w_high / w_top 调小、w_low 调大。
- */
-/**
- * 模式 6：百分比分布表（简化配置，用户 2026-09-29 要求）
- *
- * 【为什么要有这个模式】
- * 模式 5 是五段「区间 + 权重」两组参数（10 个数字），后台表单很难读懂，
- * 改起来也不知道改完会变成什么分布。
- * 模式 6 改成一张【百分比表】：每行「倍率上限 + 占比%」，加总 100% 即可。
- * 例如用户给的配置：
- *
- *   倍率区间            占比
- *   1.5x 以下（瞬爆）      10
- *   1.5 – 10x            40
- *   10 – 30x             30
- *   30 – 50x             10
- *   50 – 80x              5
- *   80 – 100x             5
- *
- * 存成一行 JSON：odds_table_json
- *   [{"max":1.5,"pct":10,"boom":true},
- *    {"max":10,"pct":40},{"max":30,"pct":30},
- *    {"max":50,"pct":10},{"max":80,"pct":5},{"max":100,"pct":5}]
- *
- * 第一行标了 "boom":true 表示「瞬爆」—— 刚起飞就炸，不给逃跑窗口，
- * 不受 min_rate 下限保护。其余各行在 [上一行的 max, 本行的 max] 区间内均匀取值。
- * 若第一行没标 boom，则最低一段从 min_rate 起算。
- */
-function tableRate(cfg) {
-  let rows = [];
-  try {
-    const raw = cfg.odds_table_json;
-    rows = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  } catch (_) { rows = []; }
-  if (!Array.isArray(rows) || !rows.length) return null;
-
-  /**
-   * 清洗用户填的行。
-   *
-   * 【2026-09-30 用户确认：下界也手填】
-   * 原来是「下界 = 上一行的 max」，每行只有一个上界。
-   * 现在每行有独立的 min，用户在后台看到什么就按什么填，互不影响。
-   *
-   * 兼容：老配置（只有 max、没有 min）仍按「上一行的 max」推导，
-   * 所以线上现有配置升级后行为不变。
-   */
-  const clean = [];
-  let prevMax = 0;
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i] || {};
-    const max = Number(r.max);
-    const pct = Number(r.pct);
-    if (!isFinite(max) || !isFinite(pct) || pct <= 0) continue;
-    if (max <= prevMax) continue;             // 上界必须严格递增，避免区间倒挂
-
-    // 下界：优先用户手填的 min；没有就接上一行
-    let lo;
-    if (r.min != null && r.min !== '') {
-      lo = Number(r.min);
-      if (!isFinite(lo)) lo = clean.length ? prevMax : 1;
-    } else {
-      lo = clean.length === 0
-        ? Math.max(1, Number(cfg.min_rate) || CFG.MIN_RATE)
-        : prevMax;
-    }
-    /**
-     * 下界可以低于 1 —— 原版就是允许的，倍率越接近 1 飞得越快，
-     * 1.00 时公式直接返回 0ms（刚起飞就炸）。
-     * 但倍率不能是 0 或负数，所以下限卡在 0.01。
-     */
-    lo = Math.max(0.01, Math.min(lo, max - 0.001));  // 保证区间不倒挂
-    clean.push({ min: lo, max, pct });
-    prevMax = max;
-  }
-  if (!clean.length) return null;
-
-  const total = clean.reduce((a, x) => a + x.pct, 0);
-  if (total <= 0) return null;
-
-  // 按百分比抽段
-  let r = Math.random() * total;
-  for (let i = 0; i < clean.length; i++) {
-    r -= clean[i].pct;
-    if (r > 0) continue;
-    return { v: clean[i].min + Math.random() * (clean[i].max - clean[i].min) };
-  }
-  // 浮点兜底：落在最后一行
-  const last = clean[clean.length - 1];
-  return { v: last.min + Math.random() * (last.max - last.min) };
-}
-
-function weightedRate(cfg) {
-  /**
-   * 取配置值，0 是【合法值】（表示该段完全不要）。
-   *
-   * ⚠️ 这里原来写的是 `v > 0 ? v : d` —— 于是后台把某段权重设成 0 时，
-   * 会静默落回默认值。实测：w_boom=50, w_low=50, 其余三个设 0，
-   * 实际 total 变成 50+50+22+20+2=144，瞬爆只有 50/144=34.4%，
-   * 而不是用户要的 50%。「设 0 关闭某段」这个操作根本不生效。
-   *
-   * 现在只有「键不存在 / 非数字」才用默认值，0 尊重用户输入。
-   * 区间端点仍要求 > 0（倍率不能是 0 或负数），用 numPos。
-   */
-  const num = (k, d) => {
-    if (cfg[k] === undefined || cfg[k] === null || cfg[k] === '') return d;
-    const v = Number(cfg[k]);
-    return isFinite(v) ? v : d;
-  };
-  /** 倍率端点必须 > 0 */
-  const numPos = (k, d) => {
-    const v = Number(cfg[k]);
-    return isFinite(v) && v > 0 ? v : d;
-  };
-  // 五段权重：瞬爆 / 低 / 中 / 高 / 爆（0 表示关闭该段）
-  const wBoom = Math.max(0, num('w_boom', 6));
-  const wLow = Math.max(0, num('w_low', 50));
-  const wMid = Math.max(0, num('w_mid', 22));
-  const wHigh = Math.max(0, num('w_high', 20));
-  const wTop = Math.max(0, num('w_top', 2));
-
-  // 瞬爆：1.00 ~ boomMax（默认 1.01），刚起飞就没
-  const boomMax = Math.max(1.001, numPos('w_boom_max', 1.01));
-  // 常规四段，段内均匀（端点用 numPos，倍率不能 <= 0）
-  const loMin = numPos('w_lo_min', 1.01);
-  const loMax = Math.max(loMin, numPos('w_lo_max', 4.00));
-  const midMin = numPos('w_mid_min', 4.00);
-  const midMax = Math.max(midMin, numPos('w_mid_max', 10.00));
-  const highMin = numPos('w_high_min', 10.00);
-  const highMax = Math.max(highMin, numPos('w_high_max', 30.00));
-  const topMin = numPos('w_top_min', 30.00);
-  const topMax = Math.max(topMin, numPos('w_top_max', 50.00));
-
-  const total = wBoom + wLow + wMid + wHigh + wTop;
-  const r = Math.random() * total;
-  if (r < wBoom) return { v: 1.00 + Math.random() * (boomMax - 1.00), boom: true };
-  if (r < wBoom + wLow) return { v: loMin + Math.random() * (loMax - loMin) };
-  if (r < wBoom + wLow + wMid) return { v: midMin + Math.random() * (midMax - midMin) };
-  if (r < wBoom + wLow + wMid + wHigh) return { v: highMin + Math.random() * (highMax - highMin) };
-  return { v: topMin + Math.random() * (topMax - topMin) };
-}
 
 /**
  * "HH:MM" → 当日分钟数；非法返回 null。
@@ -918,87 +555,18 @@ function activeEvent(cfg, now = new Date()) {
 }
 
 /**
- * 模拟 N 局，返回实际分布 —— 后台「保存后提示是否生效」用。
+ * 模拟 N 局并返回分布摘要。
  *
- * 【为什么需要】保存配置后静默生效，用户不知道改完是什么样。
- * 这个函数把「你填的百分比」翻译成「实际跑 10000 局的结果」，
- * 两者不一致时（配置被 min_rate/max_rate 截断、max 未递增等）立刻能看出来。
- *
- * @param {object} cfg  游戏参数
- * @param {number} rounds 模拟局数
+ * ⚠️ 这曾是「按人为分段的桶」统计（1.5/10/30/50/80 那些桶界），
+ *   而幂律的核心性质是【毛赔付恒定】不是「落在哪个桶」——
+ *   报桶会让人误以为提高 RTP 就是「让桶更宽」，那不是它。
+ *   所以现在只有 powerlawReport 一套指标，前缀保留是为了让
+ *   /admin/api/odds-preview 继续可用（那是 routes/，不在本次改动范围）。
  */
-function simulate(cfg, rounds = 10000) {
-  /**
-   * 【mode 9 专用报告】
-   *
-   * 【为什么幂律要单独一套指标，而不是塞进下面的桶】
-   * 下面的 buckets 是给「人为分段的分布表」用的（1.5/10/30/50/80 这些桶界）。
-   * 幂律的核心性质是【毛赔付恒定】，不是「落在哪个桶」。
-   * 报告 EV(m) 才能让运营看见「提高 RTP 会怎样影响所有逃跑点」。
-   */
-  if (String(cfg.odds_mode ?? '4') === '9') {
-    return powerlawReport(cfg, rounds);
-  }
-
-  const min = Number(cfg.min_rate) || CFG.MIN_RATE;
-  const max = Number(cfg.max_rate) || CFG.MAX_RATE;
-  const buckets = new Map();      // 「显示区间」 -> 局数
-  const KEY = [
-    [0, 1.5, '1.5x 以下'],
-    [1.5, 10, '1.5 – 10x'],
-    [10, 30, '10 – 30x'],
-    [30, 50, '30 – 50x'],
-    [50, 80, '50 – 80x'],
-    [80, 1e9, '80x 以上'],
-  ];
-  for (const k of KEY) buckets.set(k[2], 0);
-
-  let sum = 0;
-  let boom = 0;
-  let nonBoomMin = Infinity;
-  const vals = [];
-  for (let i = 0; i < rounds; i++) {
-    const r = decideRate(cfg, 1000, 0, null);
-    sum += r.rate;
-    vals.push(r.rate);
-    /**
-     * 「瞬爆」的判定标准改为「飞行时间不足 1 秒」——
-     * 也就是倍率落在 1.5x 以下。
-     * 【2026-09-30】不再依赖 r.fast 标记：那个标记原本是给
-     * MIN_FLIGHT_MS 保底做「跳过」用的，保底已删，标记失去意义。
-     */
-    if (r.rate < 1.5) boom++;
-    else if (r.rate < nonBoomMin) nonBoomMin = r.rate;
-    for (const k of KEY) {
-      if (r.rate >= k[0] && r.rate < k[1]) { buckets.set(k[2], buckets.get(k[2]) + 1); break; }
-    }
-  }
-  vals.sort((a, b) => a - b);
-  const pct = (n) => round2((n / rounds) * 100);
-  return {
-    rounds,
-    instantBoom: boom,
-    instantBoomPct: pct(boom),
-    avg: round2(sum / rounds),
-    median: vals[Math.floor(rounds / 2)],
-    max: vals[rounds - 1],
-    min: vals[0],
-    minNonBoom: nonBoomMin === Infinity ? null : round2(nonBoomMin),
-    buckets: KEY.map((k) => ({
-      label: k[2],
-      count: buckets.get(k[2]),
-      pct: pct(buckets.get(k[2])),
-    })),
-    /**
-     * 是否被 min_rate / max_rate 截断。
-     * ⚠️ 瞬爆局（fast）本来就低于 min_rate（1.00x 起），
-     *    那是设计如此，不算截断 —— 所以只检查非瞬爆局的最低值。
-     */
-    truncated: nonBoomMin < min - 0.001 || vals[rounds - 1] > max + 0.001,
-    minRate: min,
-    maxRate: max,
-  };
+function simulate(cfg, rounds = 20000) {
+  return powerlawReport(cfg, rounds);
 }
+
 
 /**
  * 幂律分布报告 —— 后台「爆点分布预览」与 saveOdds 提示都用它。
@@ -1059,7 +627,11 @@ function powerlawReport(cfg, rounds = 20000) {
 }
 
 module.exports = {
-  CFG, flightMs, rateAt, decideRate, activeEvent, payout, round2, sleep,
-  toMinutes, tableRate, simulate, beijingParts,
+  CFG,
+  /** engine.js 按名取 FLIGHT_SCALE —— 此前它拿到的是 undefined，
+   *  只因 rateAt 的默认参数恰好回落到 CFG.FLIGHT_SCALE 才没出事。 */
+  FLIGHT_SCALE: CFG.FLIGHT_SCALE,
+  flightMs, rateAt, decideRate, activeEvent, payout, round2, sleep,
+  toMinutes, beijingParts, simulate,
   powerlawRate, powerlawDecide, powerlawReport, normRtp, normCap, normEventBonus, POWERLAW,
 };
