@@ -316,10 +316,17 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f">
           <label>赔率模式</label>
           <select class="inp" id="s_mode">
+            <!--
+              【2026-10-02 mode 6 从下拉移除】mode 1–8 的实现已在 6e0a34d 删除
+              （幂律是唯一引擎），但这个下拉还列着它们 ⇒ 选了就报错。
+              「留着就是点一下报错」，所以连同面板 UI 一起清理。
+
+              ⚠️ 只删 mode 6 那一条，另外 1–8 的选项本轮【不在范围】内 ——
+                 那属于更大的产品决定，要单独批。要删就在这里一次性删掉。
+            -->
             <option value="9">幂律 · 恒定期望（推荐 · 无可套利区间）</option>
             <option value="8">老虎机（随机游走 · 零 API 成本）</option>
             <option value="7">Jev 做庄（AI 选倍率段）</option>
-            <option value="6">百分比分布表</option>
             <option value="5">加权分布（旧版，参数多）</option>
             <option value="4">区间随机（旧版，均匀分布）</option>
             <option value="1">旧版 1 · 赢</option>
