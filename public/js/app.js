@@ -1378,6 +1378,10 @@
     function onUp() { dragging = false; }
 
     el.addEventListener('mousedown', function (e) { e.preventDefault(); onDown(e.clientX); });
+    // ⚠️【2026-10-01 修黏手根因②】mousemove/touchmove 必须绑 window，不能绑 el。
+    //    绑在滑块元素上时，手指/指针【一旦滑出滑块边界】就收不到后续事件，
+    //    填充层立刻卡住不动 —— 这就是客户说的「像卡住了」。
+    //    滑块是横向窄条，拖到边缘外是几乎必然发生的动作，不是边缘情况。
     window.addEventListener('mousemove', function (e) { onMove(e.clientX, e); });
     window.addEventListener('mouseup', onUp);
 
@@ -1386,10 +1390,11 @@
       if (!t) return;
       onDown(t.clientX);
     }, { passive: true });
-    el.addEventListener('touchmove', function (e) {
+    // ⚠️ 同上：touchmove 绑 window，手指滑出滑块仍能继续拖。
+    //    preventDefault 保留 —— 它同时阻止移动端页面滚动/回弹。
+    window.addEventListener('touchmove', function (e) {
       var t = e.touches && e.touches[0];
       if (!t) return;
-      // ⚠️ 必须 preventDefault：不加就会拖动页面而不是滑块
       if (e.cancelable) e.preventDefault();
       onMove(t.clientX, e);
     }, { passive: false });

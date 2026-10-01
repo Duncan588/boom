@@ -526,7 +526,20 @@
 .ios-slider-fill {
   position: absolute; left: 0; top: 0; height: 100%; width: 0%;
   background: #fff; opacity: .9;
-  transition: width .05s linear;   /* 跟手拖动时几乎无延迟感 */
+  /* ⚠️【2026-10-01 删掉 transition —— 这是「黏手」的主因】
+     客户参考实现里写的是 `transition: width .05s linear`，我照抄了，
+     注释还写「跟手拖动时几乎无延迟感」—— 结论是【反的】。
+     给 width 加 transition 后，每一帧的填充都在追赶目标值，
+     拖动时永远追不上 ⇒ 手感发黏、像卡住。
+     跟手拖拽必须是【无过渡】：值在手指下，不在时间曲线上。
+     ⚠️ app.js 里没有任何代码会关闭它，所以这是纯 CSS 缺陷。
+     ⚠️【2026-10-01 补 pointer-events:none —— 根因③】
+     填充层是滑块的子元素，默认会【吃掉指针事件】。
+     手指压在填充层上（而不是空槽上）时，touchstart 派发到填充层，
+     而它没有自己的监听 → 事件不冒泡到滑块 → 整个滑块「按不动」。
+     客户参考实现里 fill 与 label 都有 pointer-events:none，我漏了 fill。
+     */
+  pointer-events: none;   /* 填充层不吃事件，事件落到滑块本体上 */
 }
 /**
  * 金额回显。客户要求 4：「金额显示要跟着滑块走」——
