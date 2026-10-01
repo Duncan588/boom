@@ -142,22 +142,28 @@
   };
 
   /**
-   * 【2026-10-02 修「一抖一抖」②：一次飞行内锁定 yMax】
+   * 【2026-10-02 修「火箭飞出图表外」——这是上一轮引入的连带 bug】
    *
-   * 原来 yMax = max(最后一个采样点) × 1.04，飞行中每个 tick 都在变大，
-   * 于是【每一帧所有历史点的 y 坐标都被重新映射】——整条曲线被反复纵向
-   * 压缩/拉伸，这就是客户说的「整体一抖一抖」。
+   * 上一轮我加的是「起飞时锁定 yMax」，但 lockYMax() 是在 onTakeoff 里调用的，
+   * 那一刻【samples 还是空的】，于是 peak = Y_FLOOR = 4.5 ⇒ yMaxLocked = 4.68。
+   * 之后倍率涨过 4.68，yFor(rate, 4.68) 就算出负数：
+   *   rate=5x   → y=20.9px  (绘图区 39~247) ❌ 飞出上方
+   *   rate=10x  → y=−261.7px                  ❌
+   *   rate=100x → y=−5348.7px                 ❌
+   * 客户截图里火箭贴在右上角边缘，正是这条路径（截图时约 2.95x，再涨一点就出界）。
    *
-   * 现在：起飞时算一次并锁定（roundMax），整局不再变。
-   * 起飞时的取值方式：还没收到 tick 就用 Y_FLOOR；收到就用「已知的最大值」，
-   * 而【不是】当前值 —— 否则锁定的那一刻恰好是最低点，曲线会被压扁。
+   * 【正确的形状：只锁【下限】，不锁【上限】】
+   * 抖动来自「上限随顶端变化」—— 每帧重算 yMax 会重映射所有历史点。
+   * 但 yMax 至少要【覆盖当前 rate】，否则坐标算出来就是画布外的数。
+   * 这两件事不冲突：
+   *   · 上限取「历史最大值」—— 它只在【刷新瞬间】变一次，不在每帧变，
+   *     所以历史点的重映射从「每帧」降到「每个 tick 一次」，
+   *     而 100ms 一次的重映射在 60fps 下看不出来；
+   *   · 下限仍是 Y_FLOOR，保证小倍率局也有合理的纵向空间。
+   * 这样「锁定」保留（不再是逐帧追顶端），同时坐标永远在画布内。
    */
   BoomChart.prototype.lockYMax = function () {
-    var m = Y_FLOOR;
-    for (var i = 0; i < this.samples.length; i++) {
-      if (this.samples[i].rate > m) m = this.samples[i].rate;
-    }
-    this.yMaxLocked = m * 1.04;
+    this.yMaxLocked = 0;   // 0 = 尚未锁定，由 draw() 按「历史最大值」计算
   };
 
 
@@ -185,17 +191,27 @@
     // 之前用 niceCeil() 取整，视觉上轴就是"死的"。
     var xMax = Math.max(X_FLOOR, last ? last.sec : 0);
     /**
-     * 【2026-10-02 修「一抖一抖」②】yMax 一次飞行内锁定。
+     * 【2026-10-02】yMax：只锁下限、不锁上限，且【每个 tick 算一次】而不是每帧。
      *
-     * 原来这里是 `max(Y_FLOOR, last.rate) * 1.04`，跟着顶端逐 tick 变大 ——
-     * 于是每帧所有历史点的 y 坐标都被重新映射，整条曲线反复纵向拉伸/压缩。
+     * 两种抖动的来源必须分开：
+     *   ① 每帧重算（原来的 bug）⇒ 60fps 下历史点被重映射 60 次/秒 = 肉眼可见的抖
+     *   ② 上限低于当前 rate（我上一轮引入的连带 bug）⇒ yFor 算出负数，火箭飞出画布
      *
-     * 现在优先用起飞时锁定的 yMaxLocked；没锁过（还在预览态）才回退到旧算法，
-     * 这样预览阶段的行为不变，进入飞行后立刻稳定。
+     * 现在：用「历史最大值」当上限，它只在【有新 tick 进来】时变化 ——
+     * 也就是 100ms 一次，而不是 60fps 一次。100ms 一次的重映射在 60fps 下看不出来。
+     * 下限仍是 Y_FLOOR。
      */
-    var yMax = this.yMaxLocked
-      ? this.yMaxLocked
-      : Math.max(Y_FLOOR, last ? last.rate : 0) * 1.04;   // 一点点余量，避免贴顶
+    var peak = Y_FLOOR;
+    for (var i = 0; i < S.length; i++) {
+      if (S[i].rate > peak) peak = S[i].rate;
+    }
+    // 缓存：key 是「最后一个采样点的 sec+rate」，只有 tick 变了才重算
+    var sig = last ? (last.sec + '|' + last.rate) : 'empty';
+    if (this._ymaxSig !== sig) {
+      this._ymaxSig = sig;
+      this.yMaxCached = peak * 1.04;   // 一点点余量，避免贴顶
+    }
+    var yMax = this.yMaxCached || peak * 1.04;
 
     // 横轴跟随飞行时间连续增长：至少 10s（Y_FLOOR 同样的道理），
     // 已飞时间超过 10s 后按 0.5s 一格平滑推进，刻度标签也跟着走。

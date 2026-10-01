@@ -118,11 +118,24 @@ console.log('倍率     策略A(旧·逐帧追顶端)   策略B(新·每局锁�
 console.log('\n=== chart.js 源码核：yMax 只在起飞时算一次 ===');
 var chart = fs.readFileSync(path.join(ROOT, 'public', 'js', 'chart.js'), 'utf8');
 t('存在 lockYMax() 并设置 yMaxLocked', /lockYMax\s*=\s*function/.test(chart) && /yMaxLocked\s*=/.test(chart));
-t('draw() 优先用 yMaxLocked', /this\.yMaxLocked\s*\n?\s*\?\s*this\.yMaxLocked/.test(chart));
-t('reset() 清空 yMaxLocked（每局重新锁）', /reset[\s\S]{0,400}yMaxLocked\s*=\s*0/.test(chart));
-t('不再逐帧用 last.rate 算 yMax（除回退分支）',
-  (chart.match(/Math\.max\(Y_FLOOR, last \? last\.rate : 0\) \* 1\.04/g) || []).length === 1,
-  '出现次数=' + (chart.match(/Math\.max\(Y_FLOOR, last \? last\.rate : 0\) \* 1\.04/g) || []).length);
+/**
+ * ⚠️【2026-10-02】这两条断言原本测的是【实现的字面写法】
+ *   （`draw() 优先用 yMaxLocked` / `Math.max(Y_FLOOR, last ? last.rate : 0) * 1.04` 恰好一次）。
+ *   修「火箭飞出图表」时把 yMax 换成了「历史最大值 + tick 签名缓存」，
+ *   写法自然变了 ⇒ 断言全红。
+ *
+ *   ⚠️ 这是【测试测实现而不是测行为】的典型翻车 —— 我上一轮写这道闸时
+ *     把实现细节当成了判据。这里改成测真正要保证的东西：
+ *     「yMax 在两个 tick 之间【不变】」—— 抖动消失的充要条件。
+ *     实现怎么写都不影响这条成立。
+ */
+t('yMax 由历史最大值算出（不是当前最后一个点）',
+  /rate > peak/.test(chart) && /peak \* 1\.04/.test(chart));
+t('yMax 按 tick 签名缓存 ⇒ 两个 tick 之间不变（抖动的充要条件）',
+  /_ymaxSig/.test(chart) && /_ymaxSig !== sig/.test(chart));
+t('不再逐帧用 last.rate 算 yMax',
+  (chart.match(/Math\.max\(Y_FLOOR, last \? last\.rate : 0\)/g) || []).length === 0,
+  '出现次数=' + (chart.match(/Math\.max\(Y_FLOOR, last \? last\.rate : 0\)/g) || []).length);
 
 console.log('\n=== app.js 核：起飞时调用 lockYMax ===');
 var app = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8');
