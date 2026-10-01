@@ -21,7 +21,13 @@ const fs = require('fs');
 const path = require('path');
 const G = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
 
-const RTP = Number(process.argv[2] || 0.87);
+/**
+ * ⚠️ 这个默认参数必须与 POWERLAW.RTP_DEFAULT 一致（客户 2026-10-02 拍板 = 0.90）。
+ * 漏改的后果是【静默错位】：不加参数跑会用这里的旧理论值去校实测，
+ * 不报任何错，只是断言看起来还绿。
+ * 历史：0.97 → 1.00 → 0.87 → 0.90，每次改 RTP_DEFAULT 都漏过这里。
+ */
+const RTP = Number(process.argv[2] || 0.90);
 const CAP = Number(process.argv[3] || 1000);
 const N = Number(process.argv[4] || 2000000);
 const EDGE = G.CFG.HOUSE_EDGE;
@@ -288,7 +294,7 @@ console.log('\n§7 无状态');
     if (!isFinite(v) || v < 1 || v > CAP) bad++;
   }
   ok(bad === 0, '先跑 6000 次其它调用后仍正常（无进程内缓存残留）', bad === 0 ? 'OK' : bad + ' 次越界');
-  ok(G.POWERLAW.RTP_DEFAULT === 0.87, '运营默认 RTP = 0.87', String(G.POWERLAW.RTP_DEFAULT));
+  ok(G.POWERLAW.RTP_DEFAULT === 0.90, '运营默认 RTP = 0.90（客户 2026-10-02 拍板，留活动空间）', String(G.POWERLAW.RTP_DEFAULT));
   ok(G.POWERLAW.CAP_DEFAULT === 1000, '默认 cap = 1000', String(G.POWERLAW.CAP_DEFAULT));
   ok(G.POWERLAW.RTP_MAX === 1.00 && G.POWERLAW.RTP_MIN === 0.80, 'RTP 护栏 [0.80, 1.00] 未动', '');
   ok(G.normRtp(0.5) === 0.80 && G.normRtp(5) === 1.00, 'RTP 越界被夹紧', '');

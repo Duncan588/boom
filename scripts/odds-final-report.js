@@ -23,7 +23,7 @@ const arg = (k, d) => {
   return hit ? hit.slice(k.length + 3) : d;
 };
 
-const RTP = Number(arg('rtp', 0.87));
+const RTP = Number(arg('rtp', 0.90));
 const CAP = Number(arg('cap', 1000));
 const N = Number(arg('n', 2000000));         // 分布体检样本
 const ROUNDS = Number(arg('rounds', 1000));  // 节奏曲线局数

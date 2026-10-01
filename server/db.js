@@ -429,7 +429,7 @@ const DEFAULT_SETTINGS = {
    * ⚠️ 下面 seedSettings() 只在【键不存在】时写入，所以已有库不会跟着
    *    改默认值 —— 部署必须跑 scripts/migrate-powerlaw.js --apply。
    */
-  powerlaw_rtp: '0.87',
+  powerlaw_rtp: '0.90',
   powerlaw_cap: '1000',
   min_rate: '1.10',        // 最低爆点 —— 决定最短逃跑窗口
   max_rate: '50',          // 最高爆点（上限保护）

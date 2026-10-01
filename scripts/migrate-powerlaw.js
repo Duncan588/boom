@@ -29,7 +29,7 @@ const argOf = (name, def) => {
   return hit ? hit.split('=')[1] : def;
 };
 
-const RTP = argOf('rtp', '0.87');
+const RTP = argOf('rtp', '0.90');
 const CAP = argOf('cap', '1000');
 const ACTIVITY_BONUS = argOf('bonus', '0.03');
 

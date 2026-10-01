@@ -13,7 +13,7 @@ const path = require('path');
 const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
 
 const arg = (k, d) => { const h = process.argv.find(a => a.startsWith('--' + k + '=')); return h ? h.slice(k.length + 3) : d; };
-const RTP = Number(arg('rtp', 0.87));
+const RTP = Number(arg('rtp', 0.90));
 const CAP = Number(arg('cap', 1000));
 const N = Number(arg('n', 1000000));
 const EDGE = GL.CFG.HOUSE_EDGE;

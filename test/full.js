@@ -211,7 +211,7 @@ async function waitRounds(n, timeoutMs = 45000) {
    * 所以这里能断言的是：活动照常开、照常有横幅，而爆点仍在幂律范围内。
    */
   const cfgNow = (await req('/admin/api/settings')).settings;
-  const rtp0 = Number(cfgNow.powerlaw_rtp) || 0.87;
+  const rtp0 = Number(cfgNow.powerlaw_rtp) || 0.90;
   // ⚠️ 【2026-10-01 修】上限不能写死 120。cap 已经改成 1000，写死会让这条断言
   // 随抽样随机变红（>120 的局本来是合法的），而「偶发红」会被误当成引擎坏了。
   // 该断言的正确形状是「爆点落在【当前配置的上限】之内」—— 读配置，不是读常量。
