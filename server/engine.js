@@ -13,6 +13,17 @@ const { CFG, FLIGHT_SCALE, flightMs, rateAt, payout, decideRate, activeEvent, ro
 const { runHooks } = require('./activities');
 const db = require('./db');
 const jev = require('./jev');
+/**
+ * 【2026-10-02】奖池 / 资金池上限 = 1000 亿（客户要的「稳定 100B」量级）。
+ *
+ * ⚠️ 为什么必须有上限：奖池是【只增不减】的展示值，而下注金额每局都在变，
+ *   没有任何东西约束它的长期增长 —— 加上历史上 bets.amount 曾溢出到 1e+41
+ *   （见部署文档事故 2.4），一个异常值就足以把奖池推到 e+33 量级。
+ *
+ * 幂律下 pool 不参与定价（decideRate 不读它），所以这个 clamp
+ * 【不改变任何赔率行为】，只把两个展示值钉在合理范围。
+ */
+const JACKPOT_CAP = 1e11;   // 1000 亿
 
 /**
  * 把一个人的心理倍率归到个性档（给降级分布加权用）。
@@ -45,7 +56,10 @@ class Engine {
     if (this.running) return;
     this.running = true;
     // 展示用奖池：给个非零起点，纯装饰，无真实资金
-    this.jackpot = Number(db.getSetting('jackpot', 0)) || 0;
+    // ⚠️【2026-10-02】读回来时就要 clamp —— 否则库里那个被污染的 e+33
+    //   会在每次启动时被读回内存，然后继续往上加（这就是「改完数据库又涨回去」
+    //   的机制：不是数据库自己长，是启动时读回来 + 每局累加）。
+    this.jackpot = Math.min(JACKPOT_CAP, Number(db.getSetting('jackpot', 0)) || 0);
     if (this.jackpot <= 0) {
       this.jackpot = 50000 + Math.round(Math.random() * 50000);
       db.setSetting('jackpot', this.jackpot);
@@ -57,7 +71,9 @@ class Engine {
   /** 重新读取 admin 配置（后台改参数后立即生效） */
   refreshSettings() {
     this.settings = db.allSettings();
-    this.pool = Number(this.settings.pool_balance) || 0;
+    // ⚠️【2026-10-02】同样 clamp —— refreshSettings 在运行中被调用（后台改参数后
+    //   立即生效），所以污染值可能从这条路再次进入内存。
+    this.pool = Math.min(JACKPOT_CAP, Number(this.settings.pool_balance) || 0);
     // Jev 的配置同步过去：后台改人格/采样率/活动段后下一局就生效，不需重启
     try { jev.configure(this.settings); } catch (e) { console.warn('[jev] configure 失败:', e.message); }
     return this.settings;
@@ -439,8 +455,22 @@ class Engine {
         ).run(b.id);
       }
       // 爆掉的钱进奖池（展示用）和后台资金池（决定赔率）
-      this.jackpot += lostPot;
-      this.pool += lostPot;
+      // ⚠️【2026-10-02 修奖池无限膨胀】
+      // 累加本身是有意的（展示「累计流入奖池」），但【没有上限】。
+      // 线上实测：jackpot 曾涨到 2.1e33，而 bets.amount 最大只有 1e9、
+      // 平均 2.4e7，10482 局 × 平均额 = 2.5e11 —— 与 2.1e33 差 8.3e21 倍。
+      // ⇒ 那个值【不可能】由正常累加产生，是更早的溢出事故残留
+      //   （当时 bets.amount 溢出到 1e+41，见事故记录 2.4）被写进 settings，
+      //   而 engine 启动时又从 settings 读回来（:48），于是每局继续往上加。
+      //   这就是为什么「只改数据库」会再次涨回去 —— 值在启动时被读回来。
+      //
+      // 修法：clamp 到上限，不是删掉累加。理由：
+      //   ① 累加承担「累计奖池」的展示语义，删了会让数字永远停在 100B，
+      //      与「奖池在增长」这个玩家可见的语义冲突；
+      //   ② 幂律下 pool 不参与定价（decideRate 不读它），
+      //      所以 clamp 不会改变任何赔率行为，只是把展示值钉在合理范围。
+      this.jackpot = Math.min(JACKPOT_CAP, this.jackpot + lostPot);
+      this.pool = Math.min(JACKPOT_CAP, this.pool + lostPot);
     }
 
     db.get().prepare(
