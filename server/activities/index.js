@@ -106,7 +106,18 @@ function runHooks(hook, ctx) {
     if (typeof fn !== 'function') continue;
     try {
       // 活动可以用 p.xxx 读自己的参数
-      const ret = fn({ ...ctx, p: params(id), activityId: id });
+      //
+      // 【2026-09-30 修 C 项的另一半：this 绑定】
+      // 原来这里是裸调用 `fn({...ctx, p, activityId})`，于是钩子里的
+      // `this` 是 undefined（严格模式）而不是活动模块。lucky-hour 与
+      // newbie-protect 都写 `const p = this.p || {}` ⇒ p 恒为 {} ⇒
+      // 两个活动【从上线至今从未生效过】，且 maxRateOverride 恒为 null，
+      // 于是 engine.js 里那行 const 重赋值也一直休眠着、没暴露。
+      //
+      // ⚠️ 只修 this 不修 const = 活动一开就每局抛
+      //    "Assignment to constant variable"，_loop 捕获后 sleep(1500) 再崩，
+      //    变成无限循环。两处必须同时改（engine.js 的 let 已改）。
+      const ret = fn.call(mod, { ...ctx, p: params(id), activityId: id });
       if (ret && typeof ret === 'object') Object.assign(ctx, ret);
     } catch (e) {
       // 活动出错不能影响主游戏

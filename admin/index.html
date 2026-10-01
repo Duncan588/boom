@@ -316,9 +316,10 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="f">
           <label>赔率模式</label>
           <select class="inp" id="s_mode">
+            <option value="9">幂律 · 恒定期望（推荐 · 无可套利区间）</option>
             <option value="8">老虎机（随机游走 · 零 API 成本）</option>
             <option value="7">Jev 做庄（AI 选倍率段）</option>
-            <option value="6">百分比分布表（推荐）</option>
+            <option value="6">百分比分布表</option>
             <option value="5">加权分布（旧版，参数多）</option>
             <option value="4">区间随机（旧版，均匀分布）</option>
             <option value="1">旧版 1 · 赢</option>
@@ -328,6 +329,55 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         </div>
         <div class="f"><label>最低爆点 min_rate（安全下限）</label><input class="inp" id="s_min" type="number" step="0.01"></div>
         <div class="f"><label>最高爆点 max_rate（安全上限）</label><input class="inp" id="s_max" type="number" step="0.01"></div>
+      </div>
+
+      <!--
+        模式 9：幂律（恒定期望）。这是本项目为了根治「玩家发现爆点稳定在
+        某个区间并稳定赚钱」而写的模式，分布与下面所有模式都不同。
+
+        【它做什么】
+        X = min(上限, max(1.00, floor(RTP / U)))，U 来自 crypto 的 CSPRNG。
+        对任意逃跑目标 m：P(爆点 ≥ m) = RTP / m，于是
+          · 毛赔付 P(X≥m)·m = RTP   —— 所有逃跑点完全相同
+          · 净期望 EV(m) = 0.97·RTP − 1 —— 【与 m 完全无关】
+        也就是说逃 1.5x 和逃 100x 的长期每注期望一模一样，没有任何
+        固定逃跑习惯比另一个更好。这是「不存在可套利区间」的字面含义。
+
+        【与 min_rate / max_rate 的关系 —— 幂律下这两项【不参与定价】】
+        幂律有自己的 powerlaw_rtp / powerlaw_cap。那两个字段在幂律下
+        仍可编辑（切到其它模式要用），但对 mode 9 的分布【零影响】。
+
+        【为什么不用 6】6 已经是「百分比分布表」模式，panel 与测试都在上面。
+      -->
+      <div class="panel-sub" id="w9Panel">
+        <b>幂律 · 恒定期望</b>
+        <span class="hint">
+        爆点由 CSPRNG 按幂律抽取，<b>与在场玩家、资金池、上一局爆点全部无关</b>。
+        对任意逃跑目标 m，P(爆点 ≥ m) = RTP ÷ m，所以毛赔付与净期望对所有
+        m 完全相同 —— <b>没有任何逃跑点更划算，也没有稳定赚钱的区间</b>。<br>
+        随机源是 <code>crypto.randomBytes</code>，不是 <code>Math.random</code>。
+        瞬爆（约 3%）由公式自然产生，不需要单独配置。<br>
+        <b>下表的 min_rate / max_rate 在本模式下不参与定价</b>，请用下面两个参数。
+        </span>
+      </div>
+      <div id="w9Body">
+        <div class="row">
+          <div class="f">
+            <label>返还率 RTP（0.80 – 1.00）</label>
+            <input class="inp" id="s9_rtp" type="number" min="0.80" max="1.00" step="0.01">
+          </div>
+          <div class="f">
+            <label>倍率上限 powerlaw_cap</label>
+            <input class="inp" id="s9_cap" type="number" min="1.01" step="1">
+          </div>
+        </div>
+        <div class="hint" style="margin-top:6px">
+          RTP 决定玩家长期每注期望亏损 = 0.97 × RTP − 1。
+          RTP 0.97 时为 <b>−5.91%</b>；RTP 1.00 时为 −3.00%。
+          硬上限 1.00（保本线是 1.0309，越线等于给所有人保证盈利）。
+          活动时段只会在此基础上<b>加</b> RTP，形状不变。
+        </div>
+        <div id="w9Preview" class="hint" style="margin:6px 0 2px"></div>
       </div>
 
       <!--
@@ -352,6 +402,16 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <span class="hint">起飞时由 AI 根据在场玩家的心理倍率选一个倍率段，段内具体倍率随机。
         爆点全场共享同一条曲线，不按人差别赔付。<b>没人下注的一局不会调用 API</b>；
         连续多局若房间构成相近，复用上一次的判断结果以节省费用。</span>
+        <div class="hint" style="margin-top:8px;padding:8px;border-left:3px solid var(--warn);color:var(--warn)">
+          <b>⚠ 对抗式设计的固有局限 —— 这不是缺陷，是数学性质</b><br>
+          模式 7 按玩家的逃跑习惯调整爆点，而玩家的习惯是<b>可以被观察和学习的</b>。
+          只要「房间构成 → 爆点分布」这个映射是确定的，玩家多玩几局就能摸出
+          「下午人多的时候爆点偏低」这类规律，然后专挑高期望的时段下注。
+          <b>因此「针对玩家习惯调整爆点」无法做到对玩家不可利用</b> ——
+          能做到的只是「让利用需要更多局数、更难被发现」。<br>
+          幂律（模式 9）在设计目标上与此相反：爆点与玩家完全无关，
+          从原理上不存在可利用的规律。这也是它成为默认模式的原因。
+        </div>
       </div>
       <!--
         模式 8：老虎机（server/v3/engine.js）
@@ -932,6 +992,10 @@ function loadSettings(){
        仍需读取 min_rate / max_rate —— 它们是安全护栏，见下。 */
     $('#s_min').value=s.min_rate||1.10;
     $('#s_max').value=s.max_rate||50;
+      // 模式 9（幂律）参数。留空显示为占位符默认 0.97 / 120。
+      var s9r = $('#s9_rtp'), s9c = $('#s9_cap');
+      if (s9r) s9r.value = s.powerlaw_rtp!=null && s.powerlaw_rtp!=='' ? s.powerlaw_rtp : '';
+      if (s9c) s9c.value = s.powerlaw_cap!=null && s.powerlaw_cap!=='' ? s.powerlaw_cap : '';
 
     // 模式 5 加权参数
     $('#s_wlow').value=s.w_low!=null?s.w_low:50;
@@ -1219,7 +1283,17 @@ function w6Preview(){
   var b8 = document.getElementById('w8Body');
   if (b8) b8.style.display = on8 ? '' : 'none';
 
-  void 0;
+  /**
+   * 【mode 9 / 幂律面板显隐】和 w7/w8 同一个套路：panel-sub 与 body
+   * 必须【两个都】显隐。新增模式时漏掉其中一个就会出现「有标题没输入框」。
+   */
+  var on9 = mode === '9';
+  var p9 = document.getElementById('w9Panel');
+  if (p9) p9.style.display = on9 ? '' : 'none';
+  var b9 = document.getElementById('w9Body');
+  if (b9) b9.style.display = on9 ? '' : 'none';
+  if (on9) w9Preview();
+
   /**
    * ⚠️ 这里【不能】在页面加载时就把按钮藏掉。
    * w6Preview() 在 loadSettings() 之后就会被调用，而那时 s_mode 还是
@@ -1456,6 +1530,54 @@ function w7Apply(r) {
   w7Status(r.status);
 }
 
+/**
+ * 模式 9 预览（客户端，零成本即时反馈）。
+ *
+ * ⚠️ 这里用的是与服务端 powerlawRate() 【完全相同】的公式与取整方式
+ *    （floor 到分 + clamp），但随机源是 Math.random —— 那是刻意的：
+ *    预览只是给运营看形状，不是钱的判定路径，真跑的仍然是 crypto。
+ *    所以「预览与实测有极小的尾部差异」是可接受的；
+ *    真要数字以 /admin/api/powerlaw-preview 为准（那个调 decideRate 本尊）。
+ */
+function w9Preview(){
+  var el = document.getElementById('w9Preview');
+  if (!el) return;
+  var rtpV = parseFloat(($('#s9_rtp')||{}).value);
+  var capV = parseFloat(($('#s9_cap')||{}).value);
+  var rtp = isFinite(rtpV) ? Math.max(0.80, Math.min(1.00, rtpV)) : 0.97;
+  var cap = isFinite(capV) && capV >= 1.01 ? capV : 120;
+  var N = 40000, hits = {}, targets = [1.5,2,3,5,10,20,30,50,100,120].filter(function(m){return m<=cap;});
+  targets.forEach(function(m){ hits[m] = 0; });
+  var inst = 0, atCap = 0;
+  for (var i = 0; i < N; i++) {
+    var u = Math.random() || 1e-9;
+    var x = Math.min(cap, Math.max(1, Math.floor(rtp / u * 100) / 100));
+    if (x <= 1) inst++;
+    if (x >= cap) atCap++;
+    for (var j = 0; j < targets.length; j++) if (x >= targets[j]) hits[targets[j]]++;
+  }
+  var evFlat = 0.97 * rtp - 1;
+  var worst = 0, wm = 0;
+  targets.forEach(function(m){
+    var p = hits[m] / N, th = rtp / m, e = (p / th - 1) * 100;
+    if (Math.abs(e) > Math.abs(worst)) { worst = e; wm = m; }
+  });
+  var cells = targets.map(function(m){
+    var p = hits[m] / N;
+    var ev = p * (0.97 * m - 1) + (1 - p) * (-1);
+    return '<span style="display:inline-block;margin-right:10px">' + m + 'x ' + (p*100).toFixed(1) + '%</span>';
+  }).join('');
+  el.innerHTML = '预览（4 万次模拟）　瞬爆 <b>' + (inst/N*100).toFixed(1) + '%</b>'
+    + '　触顶 <b>' + (atCap/N*100).toFixed(2) + '%</b>'
+    + '　<b style="color:' + (evFlat < 0 ? 'var(--ok)' : 'var(--err)') + '">净期望 '
+    + (evFlat*100).toFixed(2) + '% /注（与逃跑点无关）</b><br>'
+    + 'P(爆点≥m) 实测 vs 理论 RTP/m 最大偏差 <b>' + Math.abs(worst).toFixed(2) + '%</b> @' + wm + 'x'
+    + '（采样噪声，100 万局约 ±1%）<br>' + cells;
+}
+document.getElementById('w9Body').addEventListener('input', function(){
+  if (document.getElementById('s_mode').value === '9') w9Preview();
+});
+
 $('#btnSaveOdds').onclick=function(){
   /**
    * 【2026-09-30 简化后的保存体】
@@ -1506,6 +1628,29 @@ $('#btnSaveOdds').onclick=function(){
   if (mode === '8') {
     var b8v = $('#s8_boom').value;
     body.slot_boom_rate = b8v === '' ? '' : Math.max(0, Math.min(100, Number(b8v) || 0));
+  }
+
+  /**
+   * 【mode 9 / 幂律】RTP 与倍率上限跟着同一个按钮存。
+   *
+   * ⚠️ 同样遵循「只在当前模式下提交」的规则：留空就【不提交这个键】，
+   *    而不是提交 ''。提交空串会把 RTP 变成 0 → normRtp 落到 0.80 下限
+   *    （配置本身合法但完全不是运营的意思），而「没配」应该走引擎默认 0.97。
+   *    留空即默认 —— 与 slot_boom_rate 的处理方式一致。
+   */
+  if (mode === '9') {
+    var rtpV = $('#s9_rtp').value, capV = $('#s9_cap').value;
+    if (rtpV !== '') {
+      var rtpN = Number(rtpV);
+      if (!isFinite(rtpN)) { toast('返还率 RTP 必须是数字', 'err'); return; }
+      if (rtpN < 0.80 || rtpN > 1.00) { toast('返还率 RTP 必须在 0.80 – 1.00 之间', 'err'); return; }
+      body.powerlaw_rtp = String(rtpN);
+    }
+    if (capV !== '') {
+      var capN = Number(capV);
+      if (!isFinite(capN) || capN < 1.01) { toast('倍率上限至少 1.01', 'err'); return; }
+      body.powerlaw_cap = String(capN);
+    }
   }
 
   // 只在 mode 6 下提交分布表；其它模式一律不碰它

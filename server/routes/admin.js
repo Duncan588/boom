@@ -325,6 +325,31 @@ function register(router) {
     }
   });
 
+  /**
+   * 幂律（mode 9）预览。
+   *
+   * ⚠️ 为什么不能复用 /admin/api/odds-preview：那个接口跑 game-logic.simulate()，
+   *    而 simulate 的 buckets 是为「人为分段的分布表」设计的（1.5/10/30/50/80）。
+   *    幂律要报的是 P(爆点≥m) 与净期望，放进那套桶里毫无意义。
+   *    而且 simulate 走的是自己的抽样循环而不是 decideRate ——
+   *    mode 7 当年正是栽在这里：预览报的是表驱动分布，
+   *    管理员据此以为「Jev 已生效」。这里直接调 powerlawReport()，
+   *    它用的就是 decideRate 在 mode 9 下调的同一个 powerlawRate()。
+   */
+  router.get('/admin/api/powerlaw-preview', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const rounds = Math.min(200000, Math.max(1000, Number(req.query.get('rounds')) || 40000));
+    const gl = require('../game-logic');
+    try {
+      const cfg = { ...db.allSettings() };
+      if (req.query.get('rtp')) cfg.powerlaw_rtp = String(req.query.get('rtp'));
+      if (req.query.get('cap')) cfg.powerlaw_cap = String(req.query.get('cap'));
+      json(res, 200, { ok: true, ...gl.powerlawReport(cfg, rounds) });
+    } catch (e) {
+      json(res, 500, { error: '预览失败：' + e.message });
+    }
+  });
+
   router.post('/admin/api/settings', async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const b = await readBody(req);
@@ -378,6 +403,15 @@ function register(router) {
         min_rate: b.min_rate ?? db.getSetting('min_rate', 1.01),
         max_rate: b.max_rate ?? db.getSetting('max_rate', 125),
       }, 20000);
+    }
+    /**
+     * 【mode 9】保存后回幂律的真实分布摘要。
+     * 用 db.allSettings()（已含刚写入的值）而不是回显请求体 ——
+     * 请求体里缺省的键用库里现值才是真实配置。
+     */
+    if (b.odds_mode === '9') {
+      const gl = require('../game-logic');
+      effect = gl.powerlawReport(db.allSettings(), 20000);
     }
     json(res, 200, { ok: true, settings: db.allSettings(), effect });
   });

@@ -57,7 +57,7 @@ function check(name, cond, extra) {
 
   console.log('\n=== 4. 游戏回合 ===');
   const ws = new WebSocket(`ws://127.0.0.1:${WSP}/ws`);
-  let gid = 0, betDone = false, escDone = false, boom = 0;
+  let gid = 0, betDone = false, escDone = false, boom = 0, escArmed = false;
 
   const done = new Promise((resolve) => {
     ws.on('open', () => console.log('  WebSocket 已连接'));
@@ -81,22 +81,33 @@ function check(name, cond, extra) {
       }
       if (d.type === 'takeoff' && !betDone) {
         // 错过了 begin（本局已在飞行中）—— 只能等下一局
-        console.log(`  TAKEOFF #${gid} 飞行 ${d.flightMs}ms（未下注，等下一局）`);
+        console.log(`  TAKEOFF #${gid}（未下注，等下一局）`);
       }
       if (d.type === 'takeoff' && !escDone && betDone) {
-        console.log(`  TAKEOFF 飞行 ${d.flightMs}ms`);
-        setTimeout(async () => {
-          if (escDone) return;
+        /**
+         * 【2026-09-30】起飞消息不再带 flightMs（可反推爆点），
+         * 所以逃跑时机不能按「总时长 − 200ms」算。
+         * 改成【跟着 tick 走】：见到倍率超过 1.5x 就逃。
+         * 这更贴近真实玩家（看到数字了才点），也不会因为拿到总时长
+         * 而在测试里精确卡点 —— 那本身就是一种依赖泄露的行为。
+         */
+        console.log(`  TAKEOFF #${gid} 等待倍率 > 1.5x 再逃跑`);
+        escArmed = true;
+      }
+      if (d.type === 'tick' && escArmed && !escDone && betDone) {
+        if (Number(d.rate) >= 1.5) {
+          escArmed = false;
           escDone = true;
-          const r = await call('/api/game/escape', { roundId: gid });
-          if (r.ok) {
-            check('逃跑成功', true);
-            check('获得盈利', r.profit > 0, r);
-            console.log(`  盈利 ${r.profit} QUN @ ${r.rate}x → 余额 ${r.balance}`);
-          } else {
-            check('逃跑成功', false, r);
-          }
-        }, Math.min(1200, d.flightMs - 200));
+          call('/api/game/escape', { roundId: gid }).then((r) => {
+            if (r.ok) {
+              check('逃跑成功', true);
+              check('获得盈利', r.profit > 0, r);
+              console.log(`  盈利 ${r.profit} QUN @ ${r.rate}x → 余额 ${r.balance}`);
+            } else {
+              check('逃跑成功', false, r);
+            }
+          });
+        }
       }
       if (d.type === 'over') {
         boom = d.boom;

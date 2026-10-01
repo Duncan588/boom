@@ -42,3 +42,6 @@ Thumbs.db
 test-results/
 *.png
 !docs/screenshots/*.png
+
+# 本地临时探针脚本（分析用，非交付物）
+cache/

@@ -89,13 +89,22 @@ function waitFor(ws, type, ms = 30000) {
     if (i === 1) console.log('   下注调试 A:', b1.status, JSON.stringify(b1.body).slice(0,120),
                            '| B:', b2.status, JSON.stringify(b2.body).slice(0,120));
 
-    // A 在 1.5x 左右逃跑（若还没到就等）
+    // A 在 1.5x 左右逃跑（跟着 tick 走）
     const gidRef = begin.gid;
     const escapeP = new Promise(res => {
       function h(raw) {
         let m; try { m = JSON.parse(raw); } catch (_) { return; }
         if (m.type === 'over') { wsA.off('message', h); res(null); }
-        else if (m.type === 'rate' && m.rate >= 1.5) {
+        /**
+         * 【2026-09-30】这里原来等 `m.type === 'rate'`，而服务端从来没有
+         * 发过这种消息 —— 也就是说这个 escape 从来没被触发过，
+         * 每局都是走到 over 才 res(null)，「A逃跑」一栏永远是 ✗，
+         * 而测试照样通过（它只统计，不因此失败）。
+         *
+         * 改成等新的 `tick` 消息（服务端每 100ms 推一次当前倍率）。
+         * 顺带这也是「不靠泄露的总时长来卡点」的正确写法。
+         */
+        else if (m.type === 'tick' && Number(m.rate) >= 1.5) {
           wsA.off('message', h);
           res(req('/api/game/escape', { method: 'POST', body: { roundId: gidRef }, as: 'A' }));
         }
@@ -110,11 +119,14 @@ function waitFor(ws, type, ms = 30000) {
     const escaped = !!(esc && esc.body && esc.body.ok);
     escapes.push(escaped);
 
-    const fly = takeoff ? (takeoff.flightMs / 1000).toFixed(2) + 's' : '?';
+    // 【2026-09-30】takeoff 不再带 flightMs（可反推爆点），只验证它确实带了 flightStart
+    const fly = takeoff
+      ? (typeof takeoff.flightStart === 'number' ? 'flightStart ✓' : '⚠ 缺 flightStart')
+      : '?';
     console.log(
       '  第' + String(i).padStart(2) + '局 gid=' + String(begin.gid).slice(-6) +
       '  爆点 ' + over.boom.toFixed(2).padStart(6) + 'x' +
-      '  飞行 ' + fly.padStart(6) +
+      '  起飞 ' + fly.padStart(14) +
       '  A逃跑 ' + (escaped ? '✓' : '✗') +
       '  下注 ' + (okBets ? '✓' : '✗')
     );

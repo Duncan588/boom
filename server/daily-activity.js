@@ -32,7 +32,13 @@ const CFG_DEFAULT = {
   min_rate: '1',
   max_rate: '1000',        // 【2026-09-30】用户要求活动封顶 1000x（原 100x）
   weight: '0.85',          // 旧字段：曾用于一次性抽固定倍率，现已由 v3 每局抽取取代
-  boom_rate: '0.30',       // 【2026-09-30 新增】活动期瞬爆概率 30%
+  boom_rate: '0.30',       // 【2026-09-30 新增】活动期瞬爆概率 30%（仅 v3 模式读）
+  /**
+   * 【2026-09-30 新增】幂律（mode 9）下活动期的 RTP 加成。
+   * 默认 +0.03，引擎硬 clamp 到 RTP ≤ 1.00（超过就是给所有人保证盈利）。
+   * 上限见 game-logic.js 的 POWERLAW.EVENT_BONUS_MAX = 0.20。
+   */
+  rtp_bonus: '0.03',
   width: '1.8',            // v3 采样邻域宽度（对数）
   guild_id: '',            // 由 .env 提供
   channel_id: '921394612378152991',
@@ -101,6 +107,14 @@ class DailyHighRate {
         return Math.max(0, Math.min(100, v)) / 100;
       })(),
       width: Number(g('width')) || 1.8,
+      // 【2026-09-30】幂律模式下的活动加成。留空 = 默认 0.03（不是 0，
+      // 与 boom_rate「留空=0」的历史语义不同，这里活动加成默认是有的）。
+      rtpBonus: (function () {
+        const v = g('rtp_bonus');
+        if (v === '' || v == null) return 0.03;
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.max(0, Math.min(0.20, n)) : 0.03;
+      })(),
       guildId: g('guild_id'),
       channelId: g('channel_id'),
       announce: String(g('announce')) === '1',
@@ -246,6 +260,11 @@ class DailyHighRate {
       min: c.min,
       max: c.max,
       weight: c.weight,
+      // 【2026-09-30】幂律（mode 9）下活动期唯一生效的字段。
+      // 加法幅度，默认 0.03（见 game-logic.js 的 POWERLAW.EVENT_BONUS_DEFAULT），
+      // 最终 RTP 硬 clamp 到 1.00。
+      // ⚠️ 非幂律模式下这个字段不被读取 —— 那些模式仍走 v3 的 min/max/boom_rate。
+      rtp_bonus: c.rtpBonus,
       // 【2026-09-30】活动期瞬爆概率。decideRate 的活动分支读它，
       // 传给 v3 引擎的 boomQuota —— 每局独立随机，长期收敛到这个值。
       boom_rate: c.boom,

@@ -112,6 +112,21 @@ const dom = new JSDOM(`<!DOCTYPE html><html><body>
     于是整个 admin-w6-ui 测试挂掉 —— 所以必须补全。
   -->
   <div class="panel-sub" id="w7Panel"></div>
+  <!--
+    【2026-09-30】幂律面板（mode 9）的元素。
+    与 w7 同理：admin/index.html 的 inline JS 现在有
+    getElementById('w9Body').addEventListener('input', ...) 这条顶层绑定，
+    mock 里缺 w9Body 就会在 eval 阶段抛 "Cannot read properties of null"，
+    整份 admin-w6-ui 测试直接挂掉 —— 这就是「mock 与真实结构脱节」的典型。
+    加新面板时必须同步补 mock，否则整个套件死在 eval 而不是断在断言上。
+    （这段注释里不能出现反引号：本 mock 是个 template literal。）
+  -->
+  <div class="panel-sub" id="w9Panel"></div>
+  <div id="w9Body">
+    <input id="s9_rtp" value="0.97">
+    <input id="s9_cap" value="120">
+    <div id="w9Preview" class="hint"></div>
+  </div>
   <div id="w7Body">
     <select id="j_enabled"><option value="0">0</option><option value="1">1</option></select>
     <select id="j_persona"><option value="standard">standard</option><option value="bodhisattva">bodhisattva</option></select>
@@ -123,7 +138,7 @@ const dom = new JSDOM(`<!DOCTYPE html><html><body>
     <div id="j_dist"></div>
   </div>
   <select id="s_mode">
-    <option value="6">6</option><option value="5">5</option><option value="7">7</option>
+    <option value="9">9</option><option value="6">6</option><option value="5">5</option><option value="7">7</option>
   </select>
   ${['s_wlow','s_wmid','s_whigh','s_wtop','s_wboom','s_wboommax','s_wlomin','s_wlomax',
      's_wmidmin','s_wmidmax','s_whimin','s_whimax','s_wtopmin','s_wtopmax']
@@ -426,6 +441,56 @@ console.log('\n=== 14. 上界不大于下界时前端必须拦下 ===');
   doc.getElementById('s_mode').value = '6';
   doc.getElementById('btnSaveOdds').dispatchEvent(new win.Event('click', { bubbles: true }));
   ok(cap === null, `第 1 行上界 5 < 下界 10 时【没有】发请求（实际 ${cap ? '发了' : '已拦下'}）`);
+}
+
+console.log('\n=== 15. 幂律（mode 9）面板：显隐 + 保存体 + 校验 ===');
+{
+  // 显隐：panel-sub 与 body 必须【两个都】跟着模式走
+  doc.getElementById('s_mode').value = '9';
+  win.syncW5();
+  ok(doc.getElementById('w9Panel').style.display !== 'none', '模式 9 时 w9Panel 显示');
+  ok(doc.getElementById('w9Body').style.display !== 'none', '模式 9 时 w9Body 显示');
+  ok(doc.getElementById('w6Panel').style.display === 'none', '模式 9 时 w6Panel 隐藏');
+
+  doc.getElementById('s_mode').value = '6';
+  win.syncW5();
+  ok(doc.getElementById('w9Panel').style.display === 'none', '模式 6 时 w9Panel 隐藏');
+  ok(doc.getElementById('w9Body').style.display === 'none', '模式 6 时 w9Body 隐藏');
+
+  // 预览：应有内容（不是空白）
+  doc.getElementById('s_mode').value = '9';
+  win.syncW5();
+  const pv = doc.getElementById('w9Preview').textContent || '';
+  ok(pv.indexOf('净期望') >= 0, '幂律预览显示净期望', pv.slice(0, 60));
+
+  // 保存体：mode 9 必须带 powerlaw_rtp / powerlaw_cap，且【不】带 odds_table_json
+  let cap = null;
+  win.call = (path, body) => { cap = { path, body }; return Promise.resolve({ ok: true }); };
+  doc.getElementById('s_mode').value = '9';
+  doc.getElementById('s9_rtp').value = '0.95';
+  doc.getElementById('s9_cap').value = '200';
+  doc.getElementById('btnSaveOdds').dispatchEvent(new win.Event('click', { bubbles: true }));
+  ok(cap && cap.body.odds_mode === '9', '保存时提交 odds_mode=9');
+  ok(cap && cap.body.powerlaw_rtp === '0.95', '保存时提交 powerlaw_rtp', cap && String(cap.body.powerlaw_rtp));
+  ok(cap && cap.body.powerlaw_cap === '200', '保存时提交 powerlaw_cap', cap && String(cap.body.powerlaw_cap));
+  ok(cap && cap.body.odds_table_json === undefined,
+    'mode 9 不提交 odds_table_json（不能清空 mode 6 的表）');
+
+  // 留空 = 不提交该键（走引擎默认），而不是提交 ''
+  cap = null;
+  doc.getElementById('s9_rtp').value = '';
+  doc.getElementById('s9_cap').value = '';
+  doc.getElementById('btnSaveOdds').dispatchEvent(new win.Event('click', { bubbles: true }));
+  ok(cap && cap.body.powerlaw_rtp === undefined && cap.body.powerlaw_cap === undefined,
+    'RTP/上限留空时【不提交】这两个键（避免写成 0 落到下限）');
+
+  // 越界必须被前端拦下
+  for (const [label, rtp] of [['0.5（低于 0.80）', '0.5'], ['1.5（高于 1.00）', '1.5']]) {
+    cap = null;
+    doc.getElementById('s9_rtp').value = rtp;
+    doc.getElementById('btnSaveOdds').dispatchEvent(new win.Event('click', { bubbles: true }));
+    ok(cap === null, `RTP ${label} 时【没有】发请求（实际 ${cap ? '发了' : '已拦下'}）`);
+  }
 }
 
 console.log(`\n${'='.repeat(46)}`);

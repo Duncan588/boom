@@ -80,23 +80,27 @@ wss.on('connection', (ws, req) => {
     const cur = engine.current;
     if (cur) {
       const now = Date.now();
-      // 飞行中：要带上剩余飞行时间和已飞秒数，前端才能把曲线/火箭画对，
-      // 否则中途加入的玩家只看到「飞行中」却没有任何进度（看起来像假死）。
-      let flightMs = 0, flightStart = 0, elapsedSec = 0;
+      /**
+       * 【2026-09-30 A 项：快照里没有任何可反推爆点的字段】
+       *
+       * 原来这里是 `rate: cur.rate` + `flightMs: 剩余` + `elapsedSec`。
+       * 前两个各自都足以交出本局答案：
+       *   · cur.rate 就是最终爆点（engine 在起飞时写入的），中途加入者直接拿到明文
+       *   · 剩余 flightMs 加上 elapsedSec 就是总时长，闭式解可精确反推
+       * 两者都删掉，只保留 flightStart（绝对起飞时刻）与 elapsedSec（已飞多久）——
+       * 这两个只描述【过去】，与最终倍率无关。曲线由新的 tick 消息续上。
+       */
+      let flightStart = 0, elapsedSec = 0;
       if (cur.status === 'flying' && cur.flightStart) {
         elapsedSec = (now - cur.flightStart) / 1000;
-        flightMs = Math.max(0, cur.flightTotalMs - (now - cur.flightStart));
-        // ⚠️ 之前这里写 flightStart: flightStart（永远是 0），
-        // 前端拿它算「已飞时间」会得到 0 → 中途加入的玩家曲线和火箭不动，
-        // 看起来像卡死。必须传真实起飞时刻。
+        // ⚠️ 之前这里传的是局部变量（写错过一次，永远是 0 的那次）。
+        // 前端要它算「已飞时间」与时钟对齐，必须是真实起飞时刻。
         flightStart = cur.flightStart;
       }
       snap.current = {
         gid: cur.id,
         status: cur.status,
-        rate: cur.rate,
         jackpot: Math.round((Number(db.getSetting('jackpot', 0)) || 0) * 100) / 100,
-        flightMs: flightMs,
         flightStart: flightStart,
         elapsedSec: elapsedSec,
         // ⚠️ 必须带绝对截止时间。缺了它，onJoinCurrent 会退回

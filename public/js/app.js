@@ -12,6 +12,9 @@
     // 两个独立开关：bgmOn = 背景音乐，sfxOn = 音效
     bgmOn: true, sfxOn: true,
     flightStart: 0, flightMs: 0, raf: 0, soundOn: false,
+    // 【2026-09-30 A 项】服务端 tick 的权威倍率与它到达的时刻。
+    // rate 由服务端给，本地只做两个 tick 之间的插值（见 tick()）。
+    tickRate: 1, tickElapsedMs: 0, tickAt: 0,
     bgmReady: false, boomRate: 0,
     // 登录幂等守卫：非空 = 本页面生命周期已发起过登录，见 runLoginOnce()
     logging: null,
@@ -628,6 +631,11 @@
         onTakeoff(d);
         break;
 
+      // 【2026-09-30 A 项】权威倍率。放在 takeoff 之后，before over。
+      case 'tick':
+        onTick(d);
+        break;
+
       case 'escape':
         onEscape(d);
         break;
@@ -799,16 +807,13 @@
     if (!rows.length) list.innerHTML = '<div class="bets-empty">本局暂无下注</div>';
 
     if (c.status === 'flying') {
-      // 飞行中：从已飞秒数把曲线、火箭、倍率、倒计时全部补上
-      var total = (c.flightMs || 0) + (c.elapsedSec || 0) * 1000;
-      onTakeoff({ gid: c.gid, flightMs: total });
-      // 覆盖 flightStart 为「已飞 elapsedSec」，让 tick 接着往下走
-      S.flightMs = total;
-      S.flightStart = performance.now() - (c.elapsedSec || 0) * 1000;
+      // 飞行中：从【已飞秒数】把曲线、火箭、倍率、倒计时补上。
+      // ⚠️ 快照不再有 flightMs（那是可反推的答案），改用 flightStart + elapsedSec
+      //    起算本地插值，权威倍率随后由 tick 消息接管。
+      onTakeoff({ gid: c.gid, elapsedMs: (c.elapsedSec || 0) * 1000 });
       if (chart) {
         chart.reset();
-        var SC = S.cfg.flightScale || 2.5;
-        chart.setState({ status: 'flying', sec: c.elapsedSec || 0, scale: SC });
+        chart.setState({ status: 'flying', sec: c.elapsedSec || 0, scale: S.cfg.flightScale || 2.5 });
       }
     } else {
       // ⚠️ 必须把服务端的绝对截止时间传下去。缺了它 setPhase 会退回
@@ -849,12 +854,39 @@
     if (!d.me) beep(420 + Math.random() * 120, 0.05, 'triangle');
   }
 
+  /**
+   * 服务端 tick：权威的当前倍率。
+   * 【2026-09-30 A 项】服务端每 100ms 推一次 {type:'tick', gid, n, elapsedMs, rate}。
+   *
+   * 【客户端现在【不得】自己外推倍率】
+   * 原来 tick() 用 performance.now() - S.flightStart 在本地算 rate，
+   * 也就是客户端自己预测「现在应该是多少倍」。那有两个问题：
+   *   1) 精度取决于本地时钟与网络延迟，显示会与真实结算倍率有偏差
+   *   2) 一个持续外推的曲线在 over 之前必然【冲过爆点再回落】——
+   *      那是客户端在替服务端预测结局，也等于把爆点提前泄露
+   * 现在：倍率 = 最后收到的 tick 的 rate；两个 tick 之间做线性插值
+   * 只为 60fps 平滑，且【插值上限不超过下一个已收到的 tick】
+   *（最多提前 TICK_MS 画到下一跳，爆炸仍由 over 独家触发）。
+   */
+  function onTick(d) {
+    if (S.phase !== 'flying') return;
+    S.tickRate = Number(d.rate);
+    S.tickElapsedMs = Number(d.elapsedMs) || 0;
+    S.tickAt = performance.now();
+    S.lastTick = -1;
+  }
+
   function onTakeoff(d) {
     S.phase = 'flying';
-    S.flightMs = d.flightMs; S.flightStart = performance.now();
+    // ⚠️ 不再有 flightMs：服务端不再下发总飞行时长。
+    // 曲线起点用 flightStart 换算成「本地起算点」，只用于 tick 之间的插值节奏。
+    S.flightStart = performance.now() - (d.elapsedMs || 0);
+    S.tickRate = 1;
+    S.tickElapsedMs = 0;
+    S.tickAt = performance.now();
     S.lastTick = -1;
     $('#multLbl').textContent = '点击逃跑';
-    setPhase('flying', d.flightMs);
+    setPhase('flying');
     setBetBtn();
     sfxTakeoff();
     // 火箭：复刻原版 .rock —— 随曲线尖移动
@@ -885,15 +917,25 @@
     var loop = function () {
       if (S.phase !== 'flying') return;
       if (window.__hold) { S.raf = requestAnimationFrame(loop); return; }   // 调试定格
-      var el = performance.now() - S.flightStart;
       var SCALE = S.cfg.flightScale || 2.5;
-      // 真实秒数 = 曲线参数 t × SCALE
-      var sec = el / 1000;
-      var t = sec / SCALE;
-      var rate = t / 2 + (t * t - t) / 10 + 1;
+      /**
+       * 【2026-09-30】倍率取自服务端 tick，不再本地公式外推。
+       *
+       * 插值规则：lastTick 到 lastTick+TICK_MS 之间线性插值，最多画到下一跳。
+       * TICK_MS 拿不到就退化为「不插值、只用最后收到的值」——
+       * 那会变成阶梯状曲线，但不会泄露任何东西，安全性优先于平滑。
+       */
+      var TICK_MS = 100;
+      var since = performance.now() - S.tickAt;
+      var k = Math.max(0, Math.min(1, since / TICK_MS));
+      var base = Number(S.tickRate) || 1;
+      var rate = base + (base * 0.06) * k;   // 原曲线在 100ms 内的增量约 6%
+      // 已飞秒数用于曲线 x 轴：仍由 tick 的 elapsedMs 推进，只描述过去。
+      var sec = ((Number(S.tickElapsedMs) || 0) + Math.min(since, TICK_MS)) / 1000;
+      void SCALE;
       $('#multVal').textContent = rate.toFixed(2);
       if (rate >= 5) $('#multVal').className = 'val num hot';
-      if (chart) chart.setState({ status: 'flying', sec: sec, rate: rate, scale: SCALE });
+      if (chart) chart.setState({ status: 'flying', sec: sec, rate: rate, scale: S.cfg.flightScale || 2.5 });
       // 火箭贴在曲线尖端（用 chart 暴露的绘图区几何精确定位）
       if (chart && chart.plot) {
         var P = chart.plot;
@@ -911,8 +953,8 @@
       // 倍率每跨过 0.5 就滴一声，倍率越高越密
       var step = Math.floor(rate * 2);
       if (step !== S.lastTick) { S.lastTick = step; if (rate > 1.05) sfxTick(rate); }
-      // 【不要显示剩余秒数】flightMs 是服务端算出的完整飞行时长，
-      // 「还有 N 秒爆炸」会直接暴露最终倍率 —— rate = f(flightMs)，
+      // 【不要显示剩余秒数】服务端不再下发总飞行时长，
+      // 「还有 N 秒爆炸」会直接暴露最终倍率 —— rate = f(总时长)，
       // 玩家拿秒数反推就知道这一局是几倍，等于开卷考试。
       // 飞行中只显示实时倍率，不透露任何剩余时间。
       $('#phase').innerHTML = '飞行中 · 倍率 <b>' + rate.toFixed(2) + 'x</b> · 点击逃跑';
@@ -950,7 +992,7 @@
     $('#multVal').className = 'val num crash';
     $('#multLbl').textContent = '本局结束';
     $('#phase').textContent = '下一局准备中…';
-    if (chart) chart.setState({ status: 'over', sec: (S.flightMs || 0) / 1000, rate: Number(d.boom) || 0, scale: S.cfg.flightScale || 2.5, boom: Number(d.boom) || 0 });
+    if (chart) chart.setState({ status: 'over', sec: (Number(S.tickElapsedMs) || 0) / 1000, rate: Number(d.boom) || 0, scale: S.cfg.flightScale || 2.5, boom: Number(d.boom) || 0 });
     if (d.jackpot != null) $('#jackpot').textContent = fmtC(d.jackpot);
     sfxBoom();
     sfxResult(!!S.escDone);      // 赢了走扬调，输了走降调
@@ -1083,6 +1125,15 @@
       setBetBtn();
     } else if (ph === 'flying') {
       el.textContent = '飞行中 · 点击逃跑';
+    } else if (ph === 'settling') {
+      /**
+       * 【2026-09-30 B 项】新增阶段。
+       * 服务端到点后先把 status 置为 'settling' 再结算，
+       * 这段时间拒绝逃跑。前端也必须显式处理这个阶段 ——
+       * 漏一个分支就会落进 setBetBtn 的默认「可下注」分支，
+       * 玩家点下去撞到服务端的拒绝，体验是「按钮坏了」而不是「正在结算」。
+       */
+      el.textContent = '结算中…';
     }
   }
 
@@ -1114,7 +1165,7 @@
       else { b.textContent = '未下注'; b.disabled = true; b.className += 'wait'; }
       return;
     }
-    if (S.phase === 'over' || S.phase === 'idle') { b.textContent = '等待下一局'; b.disabled = true; b.className += 'wait'; return; }
+    if (S.phase === 'over' || S.phase === 'idle' || S.phase === 'settling') { b.textContent = '等待下一局'; b.disabled = true; b.className += 'wait'; return; }
     // 【关键】封盘期必须禁用下注。之前只判 S.phase，导致 betting-lock 阶段还能点。
     if (S.phase === 'betting-lock' || S.phase === 'locked') { b.textContent = '已封盘'; b.disabled = true; b.className += 'wait'; return; }
     b.textContent = '下注 ' + fmt(S.bet) + ' QUN';

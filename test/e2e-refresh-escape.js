@@ -70,8 +70,17 @@ function waitFor(ws, type, ms) {
   ok('下注成功', !!(bet.body && bet.body.ok), JSON.stringify(bet.body));
 
   const takeoff = await waitFor(ws1, 'takeoff', 40000);
-  ok('起飞消息含 flightMs', typeof takeoff.flightMs === 'number' && takeoff.flightMs > 0,
+  /**
+   * 【2026-09-30 反转这条断言】
+   * 原来这里断言「起飞消息含 flightMs」—— 那是把信息泄露当成了需求。
+   * flightMs 与爆点一一对应，闭式解 t=(√(40r−24)−4)/2 可精确反推（实测往返误差
+   * ≤1.2e-2），等于把本局答案发给客户端。现在改为断言它【不在】。
+   * 曲线改由每 100ms 的 tick 消息续上，爆炸只由 over 触发。
+   */
+  ok('起飞消息【不含】flightMs（防泄露）', takeoff.flightMs === undefined,
     'flightMs=' + takeoff.flightMs);
+  ok('起飞消息带 flightStart（客户端据此对齐时钟）', typeof takeoff.flightStart === 'number',
+    'flightStart=' + takeoff.flightStart);
   await new Promise(r => setTimeout(r, 1200));   // 飞一会儿再重连，模拟用户刷新
 
   console.log('\n=== 【问题2】刷新网页：断线重连看快照 ===');
@@ -89,6 +98,16 @@ function waitFor(ws, type, ms) {
   ok('快照带 elapsedSec（曲线/火箭要动）', typeof c.elapsedSec === 'number' && c.elapsedSec > 0,
     'elapsedSec=' + c.elapsedSec);
   ok('快照带 bets 列表', Array.isArray(c.bets) && c.bets.length > 0, 'count=' + (c.bets || []).length);
+  /**
+   * 【2026-09-30 新增】快照也必须不含可反推字段。
+   * 快照是「刷新页面」那条路径唯一的状态来源，改动前它同时带
+   * `rate`（爆点明文）与 `flightMs`（剩余时长，+ elapsedSec = 总时长）。
+   * 只测 takeoff 会漏掉这一处，而它恰恰是「刷新就中大奖」的路径。
+   */
+  ok('快照【不含】rate（爆点明文）', c.rate === undefined, 'rate=' + JSON.stringify(c.rate));
+  ok('快照【不含】flightMs（剩余时长可反推）', c.flightMs === undefined, 'flightMs=' + JSON.stringify(c.flightMs));
+  ok('快照带 flightStart（客户端据此续曲线）', typeof c.flightStart === 'number',
+    'flightStart=' + c.flightStart);
 
   console.log('\n=== 【问题1】前端能否走逃跑分支（不再误走下注分支）===');
   // 前端逻辑：S.hasBet && S.phase === 'flying' → 逃跑分支

@@ -128,7 +128,23 @@ class Engine {
 
   async playRound() {
     this.refreshSettings();
-    const cfg = this.settings;
+    /**
+     * 【2026-09-30 修 C 项：const → let】
+     *
+     * 原来这里是 `const cfg = this.settings`，而下面 0a 段为了应用活动的
+     * maxRateOverride 会写 `cfg = { ...cfg, max_rate: ... }` —— 在 strict mode
+     * 下抛 TypeError: Assignment to constant variable。
+     *
+     * 【为什么它今天才暴露，而且潜伏了多久】
+     * 两个活动模块都写 `const p = this.p || {}`，而 runHooks 是裸调用
+     * `fn({...ctx, p})` ⇒ this 永远不是模块对象 ⇒ p 恒为 {} ⇒ 钩子恒返回 null
+     * ⇒ maxRateOverride 恒为空 ⇒ 这行永远不执行。
+     * 也就是说 lucky_hour 从上线至今从未生效过，这行代码是休眠的。
+     * 一旦修好 this 绑定（activities/index.js 改为 fn.call(mod, ...)），
+     * 这行就会在活动期真的执行 —— 不同时修 const 就是「活动一开就每局崩」。
+     * 两处必须同一次提交改完。test/activity-hook.js 钉住这个组合。
+     */
+    let cfg = this.settings;
 
     /**
      * 【mode 7 / Jev 做庄】本局是否走 Jev 选段。
@@ -139,19 +155,73 @@ class Engine {
       && String(cfg.jev_enabled ?? '0') === '1'
       && !!(cfg.jev_api_key || process.env.TYPESAFE_API_KEY);
 
+    /**
+     * 【2026-09-30 E 项：幂律模式下 Jev 完全不参与】
+     *
+     * 幂律的整个卖点是「爆点与玩家无关」。让 Jev 参与 = 同一个房间得到同一个分布
+     * = 玩家只要观察到房间不变就能反推爆点区间。两者在目标上是冲突的。
+     * 所以 mode 9 下 mode7 恒为 false：
+     *   · 不查 seatedProfiles（省掉 2N 条 SQL）
+     *   · 不 tickRound / 不 prefetch（省掉外部 API 调用与费用）
+     *   · 隐私：幂律运行时【没有任何玩家数据离开进程】
+     *
+     * mode 7 的代码与配置全部保留，管理员可以随时切回去使用。
+     */
+    const powerlaw = String(cfg.odds_mode) === '9';
+
+    /**
+     * 【2026-09-30 E 项】幂律模式下 Jev 恒不参与（见上面 powerlaw 的说明）。
+     * 这一行放在 mode7 的定义【之后】，覆写它。
+     */
+    const mode7Active = mode7 && !powerlaw;
+
     // ---- 0a. 小活动插件钩子（可在开局前改倍率上限/抽成/标签）----
     // 框架在 server/activities/，加活动只加文件，不改主循环。
     const act = runHooks('onRoundBegin', {
       maxRateOverride: null,
       rakeOverride: null,
       activityLabel: null,
+      /**
+       * 【2026-09-30】活动想知道本局的 baseRtp 才能算出 rtpOverride。
+       * 传进来而不是让活动自己读 db：cfg 就是本局 refreshSettings() 之后的
+       * 快照，活动读 db 拿到的是【那一刻】的值，两者可能不一致
+       * （本局内配置被改过）—— 那正是「活动 RTP 以哪一局为准」的老问题。
+       */
+      powerlawRtp: Number(cfg.powerlaw_rtp) || 0.97,
     });
     if (act.activityLabel) {
       console.log(`[activity] 本局生效: ${act.activityLabel}`);
     }
+    /**
+     * 【2026-09-30】maxRateOverride 只在【非幂律】模式生效。
+     *
+     * 幂律的定价参数是 powerlaw_rtp / powerlaw_cap，不是 max_rate。
+     * 活动抬高 max_rate 在幂律下会静默无效 —— 而「配了没生效」正是
+     * 本项目反复出现的运维事故形状。所以这里显式拒绝并在日志里说明，
+     * 而不是让活动看起来开了、实际什么也没做。
+     */
     if (act.maxRateOverride) {
-      // 只抬高引擎上限，不改用户配置的 band —— 由 odds 层消费
-      cfg = { ...cfg, max_rate: String(Math.max(Number(cfg.max_rate) || 0, act.maxRateOverride)) };
+      if (powerlaw) {
+        console.log('[activity] 幂律模式下 maxRateOverride 不参与定价（请用 rtpBonus 调整 RTP）');
+      } else {
+        // 只抬高引擎上限，不改用户配置的 band —— 由 odds 层消费
+        cfg = { ...cfg, max_rate: String(Math.max(Number(cfg.max_rate) || 0, act.maxRateOverride)) };
+      }
+    }
+    /**
+     * 【2026-09-30】幂律模式下活动通过 rtpOverride 调整返还率。
+     *
+     * 钳制做在 engine 这一层【和】game-logic 的 normRtp 里各一次：
+     * 前者是「活动不许把 RTP 顶到 1.00 以上」，后者是「任何来源的 RTP
+     * 都在 [0.80, 1.00]」。只在一处钳制的话，绕开另一处就能配出 RTP>1。
+     * 本局内不再变动：cfg 是本局开始时的快照，抽爆点只发生一次。
+     */
+    if (act.rtpOverride != null && powerlaw) {
+      const rtp = Math.max(0.80, Math.min(1.00, Number(act.rtpOverride)));
+      if (Math.abs(rtp - (Number(cfg.powerlaw_rtp) || 0)) > 1e-9) {
+        console.log(`[activity] 本局 RTP ${cfg.powerlaw_rtp} → ${rtp}`);
+        cfg = { ...cfg, powerlaw_rtp: String(rtp) };
+      }
     }
 
     // ---- 0. 限时活动检测 ----
@@ -240,8 +310,13 @@ class Engine {
      *
      * ⚠️ 只统计真人下注，机器人不计入 —— 否则「没人也有一屋子机器人」，
      *    Jev 会为一个空房间持续付费，那是纯浪费。
+     *
+     * 【2026-09-30 E 项：幂律模式下【完全不调用】】
+     * mode 9 的爆点只由 CSPRNG 决定，不看任何玩家状态。
+     * 这里除了不再影响定价，还省掉了空房间时每局一次 seatedProfiles
+     * 查询（每玩家还要再查一次最近 20 次逃跑历史）—— N 个玩家就是 2N 条 SQL。
      */
-    const seated = mode7 ? this.seatedProfiles(roundId) : null;
+    const seated = mode7Active ? this.seatedProfiles(roundId) : null;
 
     // ---- 4. 决定爆点（资金池反推 / 限时活动 / Jev 选段）----
     const pot = db.get().prepare(
@@ -249,13 +324,14 @@ class Engine {
     ).get(roundId).s;
     const dec = decideRate(cfg, pot, this.pool, ev, seated && seated.length ? { seated, lastBoom: this.lastBoom } : null);
 
+
     /**
      * 【预热下一局分布】fire-and-forget，绝不 await。
      * 起飞这一刻玩家正盯着火箭等结果，任何网络等待都是可见的卡顿。
      * jev.prefetch 内部永不 reject 且带 abort 超时 —— 一个可选的外部
      * 副作用不能有能力把游戏带走（这正是活动 teardown 踩过的坑）。
      */
-    if (mode7 && seated && seated.length) {
+    if (mode7Active && seated && seated.length) {
       try {
         jev.tickRound(roundId + 1);
         jev.prefetch(seated, dec.rate, null).catch(() => {});
@@ -284,8 +360,22 @@ class Engine {
     this.current.rate = rate;
     this.lastBoom = rate;                       // Jev 下一局的 state 依据
     this.current.flightStart = Date.now();      // 逃跑时按真实已飞时间算倍率
-    this.current.flightTotalMs = ms;            // 中途加入的玩家据此算剩余时间
-    this.broadcast({ type: 'takeoff', gid: roundId, flightMs: ms });
+    this.current.flightTotalMs = ms;            // 【仅服务端】绝不外发，见下方注释
+
+    /**
+     * 【2026-09-30 A 项：起飞消息不再携带 flightMs】
+     *
+     * flightMs 与爆点【一一对应】，闭式解 t=(√(40r−24)−4)/2 可精确反推：
+     * 实测往返误差最大 1.16e-2（250x 处），等于把本局答案直接发给客户端。
+     * 之前只删了前端的倒计时显示（app.js 里那段注释），
+     * 但【消息里那个字段本身还在】—— 删显示不等于删泄露。
+     *
+     * 客户端只需要「当前倍率曲线」，所以这里改发【起飞时刻】：
+     * 有了 flightStart + 服务端下发的 tick 序列，客户端能画出完全相同的曲线，
+     * 却拿不到任何与最终倍率有关的信息。
+     */
+    this.broadcast({ type: 'takeoff', gid: roundId, flightStart: this.current.flightStart });
+    this.ticker = null;   // 旧的 tick 循环，本局新建
 
     /**
      * 【Jev 决策日志】只在真正走了 Jev 分支时打。
@@ -300,8 +390,36 @@ class Engine {
       console.log(`[jev] 第 ${roundId} 局 爆点 ${rate}x  段=${dec.jev.band}  来源=${dec.jev.source}  conf=${dec.jev.confidence ?? '-'}`);
     }
 
-    await sleep(ms);
+    /**
+     * 【2026-09-30 A 项：飞行期间按固定节拍推送 tick】
+     *
+     * 原来是一句 `await sleep(ms)` —— 期间 WS 完全静默，客户端只能靠自己
+     * 的时钟外推。现在每 TICK_MS 推一次当前倍率：
+     *   · 客户端渲染的是服务端权威值，不需要自己猜（也不允许自己猜）
+     *   · 消息里只有「已经发生的倍率」，与最终爆点无关，不可反推
+     *
+     * 【为什么不能在最后一刻「多发一跳」给客户端暗示】
+     * 爆炸只由下面的 over 消息触发。若客户端收到 boom 就自己画，那本地
+     * 外推与真实结束时刻之间有一个 100ms 的不一致窗口，
+     * 玩家会看到「倍数冲到 12.7x 却还没炸」—— 那是客户端在替服务端预测。
+     * 所以循环严格在 elapsed < ms 时才发 tick，结束由 over 独家触发。
+     */
+    await this.flightLoop(roundId, ms);
     if (!this.running || this.current.id !== roundId) return;
+
+    /**
+     * 【2026-09-30 B 项：到点先置 settling，再结算】
+     *
+     * 原来 sleep(ms) 到期后，status 仍是 'flying'，直到 this.current = null
+     * 才消失。两者之间有一整段同步结算代码（查 losers、UPDATE bets、
+     * 写 rounds、发 over），期间 escape() 的守卫 `status === 'flying'`
+     * 依然通过 —— 玩家能在这段窗口里按【已超过爆点】的倍率结算。
+     *
+     * 单线程下这段通常只有几十毫秒，但 sleep 回调被事件循环排队
+     * （GC、其它定时器）时可以到几百毫秒，而爆点越接近、这个窗口越致命。
+     * 所以到点后立刻把 status 换成 'settling'，escape() 一律拒绝。
+     */
+    this.current.status = 'settling';
 
     // ---- 5. 爆点结算 ----
     const now = db.now();
@@ -339,6 +457,31 @@ class Engine {
     });
     this.current = null;
     await sleep(2500);
+  }
+
+  /**
+   * 飞行期 tick 循环：每 CFG.TICK_MS 广播一次当前倍率，到点返回。
+   *
+   * @param roundId 本局 id（用于中止判定，换局即退出）
+   * @param ms      本局总飞行时长（仅服务端使用，绝不广播）
+   */
+  async flightLoop(roundId, ms) {
+    const end = Date.now() + ms;
+    let next = 0;                     // 已推送的 tick 数
+    while (this.running && this.current && this.current.id === roundId) {
+      const left = end - Date.now();
+      if (left <= 0) break;
+      await sleep(Math.min(CFG.TICK_MS, left));
+      if (!this.running || !this.current || this.current.id !== roundId) return;
+      const elapsed = Date.now() - this.current.flightStart;
+      // ⚠️ 到点后不再发 tick：爆炸由 over 独家触发，客户端不得自行预测。
+      if (elapsed >= ms) break;
+      next++;
+      this.broadcast({
+        type: 'tick', gid: roundId, n: next, elapsedMs: elapsed,
+        rate: round2(rateAt(elapsed, FLIGHT_SCALE)),
+      });
+    }
   }
 
   /**
@@ -447,6 +590,11 @@ class Engine {
 
   /** 逃跑 */
   escape(userId, roundId) {
+    /**
+     * 【2026-09-30 B 项：settling 一律拒绝】
+     * 到点后引擎先把 status 置为 'settling' 再做结算，
+     * 所以「飞行已结束、结算未完成」这个窗口不再被当成可逃跑。
+     */
     if (!this.current || this.current.id !== roundId || this.current.status !== 'flying') {
       return { ok: false, code: 10005, msg: '当前不可逃跑' };
     }
@@ -459,6 +607,26 @@ class Engine {
     const elapsed = Date.now() - this.current.flightStart;
     const cur = round2(rateAt(elapsed, FLIGHT_SCALE));
     if (cur < 1) return { ok: false, code: 10008, msg: '倍率过低，无法逃跑' };
+
+    /**
+     * 【2026-09-30 B 项：与本局爆点比较，≥ 爆点一律判失败（已爆）】
+     *
+     * 【原来缺这一句会发生什么 —— 实测，不是理论】
+     * escape() 的守卫只有 `status === 'flying'`，而 flightStart 到结算之间
+     * 全程都是 'flying'。所以只要飞行时间已经超过爆点对应的时长，
+     * 玩家仍能提交：实测「爆点 2.0x、已飞 100 秒」这一局，
+     * rateAt 算出 **1000.34x** 依然被接受并按 1000.34x 派奖。
+     * 也就是说飞得越久，赢到的钱越多，而那一局本来早就该炸了。
+     *
+     * 这是一个真实资金漏洞：sleep 回调被事件循环排队（GC / 其它定时器）
+     * 就会打开这个窗口，爆点越低（飞行越短）越容易被卡进去。
+     *
+     * 用 >= 而不是 >：倍率恰好等于爆点时，那一瞬爆炸也已经在发生。
+     */
+    const boom = Number(this.current.rate);
+    if (isFinite(boom) && cur >= boom) {
+      return { ok: false, code: 10010, msg: '已经爆了' };
+    }
 
     const win = payout(row.amount, cur);
     const ts = db.now();

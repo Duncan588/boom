@@ -18,6 +18,8 @@
  * 保证玩家至少有逃跑窗口。
  */
 
+const crypto = require('crypto');
+
 const CFG = {
   BET_MS: 10000,         // 下单阶段（用户要求 10 秒）
   LOCK_MS: 5000,         // 封盘阶段（用户要求 5 秒封盘后才起飞）
@@ -54,6 +56,18 @@ const CFG = {
   // 现在恢复原版行为：不设任何飞行时长下限，1.0x 就是 0ms。
   // 用户分布表里 1.01~1.5x 那行【不需要勾任何东西】自动就是瞬爆。
   MIN_FLIGHT_MS: 0,
+  /**
+   * 【2026-09-30 A 项】飞行期 tick 广播节拍（毫秒）。
+   *
+   * 原来飞行期间 WS 完全静默，客户端自己按本地时钟算倍率。
+   * 现在服务端每 100ms 推一次当前倍率，客户端只渲染。
+   * 100ms 的理由：原版曲线每 100ms 加一个数据点（chart.js 的 STEP_MS），
+   * 节拍与采样点对齐，客户端插值后曲线与原来逐点绘制完全一致。
+   *
+   * ⚠️ 这里是【已经过去的倍率】，不是剩余时间。绝不能在这个消息里
+   *    带上 ms / 剩余秒数 —— 那会再次变成可反推的答案。
+   */
+  TICK_MS: 100,
 };
 
 /**
@@ -204,6 +218,166 @@ function payout(amount, r) {
 function round2(n) { return Math.round(n * 100) / 100; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+/* ===================================================================
+ * 模式 9：幂律分布（恒定期望）
+ *
+ * 【为什么要有这个模式 —— 它解决的是本项目反复踩到的那一类问题】
+ * 玩家发现爆点「稳定在某个区间」并稳定赚钱。每一代算法都栽在这里：
+ *   · 均匀分布 [1.1, 50]   → 10 局净赚 5 倍本金
+ *   · 五段加权 / 百分比表   → 出现「习惯区间」，逃 2x 最稳
+ *   · 池子反推 / Jev 选段   → 与玩家行为耦合，房间不变则分布不变
+ * 根子都一样：分布里存在一个「期望收益更高」的区间，玩家发现它之后
+ * 只需要固定逃跑点就能长期获利。
+ *
+ * 【本模式的性质：对任意逃跑目标 m，P(X ≥ m) = RTP / m】
+ * 于是两个更强的不变量同时成立：
+ *
+ *   ① 毛赔付恒定：P(X≥m)·m = RTP                     —— 对所有 m ≤ cap 精确相等
+ *   ② 净期望恒定：EV(m) = P·(0.97m − 1) + (1−P)·(−1)
+ *                = 0.97·m·P − 1 = 0.97·RTP − 1     —— 【与 m 完全无关】
+ *
+ * ② 才是「不存在最优点、不存在稳定赚钱区间」那句话的字面含义：
+ * 玩家逃 1.5x、逃 100x 还是逃 30x，长期每注的期望完全一样。
+ * 任何固定的逃跑习惯都不比另一个习惯更好。
+ *
+ * ⚠️ 推 ② 时最容易漏掉【输掉的那一支】：
+ *    只写 P·(0.97m − 1) 会算出「逃跑点越高期望越高」（0.97+0.03 那次就漏了），
+ *    因为它把「没逃出去 = 输掉全部本金」这一支漏掉了。
+ *    补上 (1−P)·(−1) 之后 m 整个约掉，这才是玩家真实面对的赌局。
+ *    test/odds-powerlaw.js §2 用仿真（不是闭式）独立验证 ②，
+ *    就是为了让这个减法出错时被抓住，而不是靠注释提醒。
+ *
+ * 数值（默认 RTP=0.97，payout() 抽水 3%）：EV = 0.97·0.97 − 1 = **−0.0591**
+ * 也就是说玩家每注期望亏 5.91%，与逃到哪里无关。
+ *
+ * 【为什么必须用 crypto 而不是 Math.random】
+ * Math.random() 是可预测的（V8 用 xorshift128+，观察输出即可恢复内部状态），
+ * 而爆点直接决定钱。一条能被玩家反推的伪随机序列 = 一个可被套利的固定序列。
+ * crypto.randomBytes 走 OS 的 CSPRNG，观察输出无法恢复内部状态。
+ *
+ * 【瞬爆概率不再单独设置】
+ * 由公式自然产生：X ≤ 1.00 当且仅当 RTP/U < 2，即 U > RTP/2，
+ * 概率 = 1 − RTP/2·... 实测 ≈ 1 − RTP（3.9% @ RTP=0.97）。
+ * 所以不需要「瞬爆段」这种额外旋钮，也就没有「配了瞬爆段」和
+ * 「瞬爆率对不上」两个新问题。
+ */
+const POWERLAW = {
+  RTP_DEFAULT: 0.97,     // 默认返还率。后台可配，范围 0.80–1.00
+  RTP_MIN: 0.80,
+  /**
+   * ⚠️ RTP 硬上限 1.00。超过 1.00 玩家就是正期望，长期必然赢。
+   *
+   * 精确的保本线其实比 1.00 更靠后：EV = 0.97·RTP − 1 = 0 ⇒ RTP = 1.0309。
+   * 所以 1.00 留了 3 个百分点的余量（那时玩家 EV 仍为 −0.0300，庄家仍有 3% 优势）。
+   * 【为什么不把上限设成 1.0309】保本点是个危险的心理锚点：
+   * 运营把它配到附近、活动加成叠上去就越线，而且 0.97 抽水是全局常量、
+   * 任何改抽水的活动都会让这条线移动。1.00 是个与抽水无关的整数安全线。
+   * 活动加成的加法幅度必须 clamp 到这里。
+   */
+  RTP_MAX: 1.00,
+  CAP_DEFAULT: 120,      // 倍率上限（独立于 max_rate，避免护栏改写定价）
+  CAP_MIN: 1.01,
+  /** 活动期加成的默认幅度与上限（后台可配，activities_json 覆盖） */
+  EVENT_BONUS_DEFAULT: 0.03,
+  EVENT_BONUS_MAX: 0.20,
+};
+
+/**
+ * 取 RTP，clamp 到 [0.80, 1.00]。
+ * 0.80 是运营下限：低于它玩家体感是「必输」，社区游戏会直接流失。
+ * 1.00 是数学红线，见 POWERLAW.RTP_MAX 的注释。
+ */
+function normRtp(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return POWERLAW.RTP_DEFAULT;
+  return Math.max(POWERLAW.RTP_MIN, Math.min(POWERLAW.RTP_MAX, n));
+}
+
+function normCap(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n < POWERLAW.CAP_MIN) return POWERLAW.CAP_DEFAULT;
+  return n;
+}
+
+/**
+ * 活动期的 RTP 幅度（加法）。
+ *
+ * 【为什么是加法而不是 ×1.05】
+ * 乘法后要在代码里 clamp，运营配 1.5 倍时 clamp 位置不直观；
+ * 加法直接是「这一小时每人多返 3%」，力度可线性换算，
+ * 且 clamp 到 RTP_MAX 之后语义明确：活动最多把 RTP 拉到 1.00，不会溢出。
+ * 配 0（显式关闭活动加成）与留空（有活动就给默认幅度）都支持。
+ */
+function normEventBonus(v) {
+  if (v === undefined || v === null || v === '') return POWERLAW.EVENT_BONUS_DEFAULT;
+  const n = Number(v);
+  if (!isFinite(n) || n < 0) return 0;
+  return Math.min(POWERLAW.EVENT_BONUS_MAX, n);
+}
+
+/** 均匀随机数 U ∈ (0,1)，48 bit，来自 CSPRNG。禁止改成 Math.random() */
+function cryptoUniform() {
+  const b = crypto.randomBytes(6);
+  let n = 0;
+  for (let i = 0; i < b.length; i++) n = n * 256 + b[i];
+  return (n + 0.5) / 281474976710656;   // 2^48
+}
+
+/**
+ * 幂律抽样：X = min(cap, max(1.00, floor2(RTP / U)))
+ *
+ * 【截断为什么必须用 clamp（把超界质量并进 cap），不能用重抽】
+ * 实测 100 万局、cap=120、RTP=0.97：
+ *                    P(X≥10) 误差   P(X≥30) 误差   P(X≥100) 误差
+ *   clamp 到 120       +0.54%          −0.49%         −2.85%
+ *   超界重抽           −8.1%           −25.2%         −83.2%
+ * 原因：cap=120 ≥ 所有关心的 m ≤ 120，超界质量全部堆在 120.00 这【一个点】上，
+ * 而该点本身就在每个 m 的赢面内，恒等式 P(X≥m)·m = RTP 不被破坏。
+ * 重抽则把尾部直接削掉 —— m 越接近 cap 偏得越狠，破坏的正是本模式的核心性质。
+ *
+ * 【定点量化用 floor 而不是 round】
+ * floor 把连续值向下取到分，x 的 P(X≥m) 严格 ≥ RTP/m；round 会把一半质量
+ * 抬到 m 的正上方，使 P(X≥m) 略低于 RTP/m。实测 100 万局最大相对误差：
+ * floor −0.99%@(m=100) vs round +0.73%@(m=100) —— 两者同量级，
+ * 选 floor 是因为它的偏差方向单调（只会偏低，不会把高逃跑点说成更划算），
+ * 配合测试里单向断言更安全。
+ *
+ * @param {number} rtp  已 normRtp 归一化的 RTP
+ * @param {number} cap  倍率上限
+ * @returns {number} 2 位小数的倍率，恒在 [1.00, cap]
+ */
+function powerlawRate(rtp = POWERLAW.RTP_DEFAULT, cap = POWERLAW.CAP_DEFAULT) {
+  const r = normRtp(rtp);
+  const c = normCap(cap);
+  const u = cryptoUniform();                 // (0,1)
+  const raw = r / u;                          // ≥ r
+  const q = Math.floor(raw * 100) / 100;      // 向下取到分
+  return round2(Math.max(1, Math.min(c, q)));
+}
+
+/**
+ * 幂律模式的完整决策。忽略 pot / pool / ctx —— 见 decideRate 的 E 条说明。
+ * @param {object} cfg    settings
+ * @param {object} event  命中的限时活动（无则 null），只用来加 RTP
+ */
+function powerlawDecide(cfg, event) {
+  const base = normRtp(cfg.powerlaw_rtp);
+  const cap = normCap(cfg.powerlaw_cap);
+  // 活动只改 RTP，且以本局 begin 时读到的配置为准（本函数在 decideRate 里
+  // 每局调用一次，cfg 就是那一局 refreshSettings() 之后的快照）。
+  const bonus = event ? normEventBonus(event.rtp_bonus) : 0;
+  const rtp = Math.min(POWERLAW.RTP_MAX, base + bonus);   // ⚠️ 硬 clamp
+  const rate = powerlawRate(rtp, cap);
+  return {
+    rate,
+    fast: false,
+    mode: '9-powerlaw',
+    powerlaw: { rtp: round4(rtp), baseRtp: round4(base), bonus: round4(bonus), cap },
+  };
+}
+
+function round4(n) { return Math.round(n * 10000) / 10000; }
+
 /**
  * 根据 admin 配置计算本局爆点。
  * @param {object} cfg  游戏参数（来自 db.allSettings()）
@@ -252,7 +426,15 @@ function decideRate(cfg, pot, pool, event, ctx) {
      * 现在：活动的 min/max 作为倍率【范围】，boom_rate 作为瞬爆概率，
      * 每局由 v3 引擎独立抽取 —— 活动期同样有起伏，且瞬爆率可控。
      * v3 是纯本地算法，零 API 成本。
+     *
+     * ⚠️【2026-09-30 mode 9 例外】幂律模式下本分支【不执行】。
+     *    v3 的随机游走与幂律是完全不同的分布形状：活动期会突然换成另一个游戏，
+     *    玩家只要玩过一次活动时段就能识别出「这段时间的爆点不一样」——
+     *    这正是幂律下活动只调 RTP（不改 min/max、不换引擎）的原因。
      */
+    if (mode === '9') {
+      return powerlawDecide(cfg, event);   // 只加 RTP，分布形状不变
+    }
     const ev = require('./v3/engine');
     const d = ev.rollRange({
       min: Math.max(min, Number(event.min) || 1),
@@ -265,6 +447,29 @@ function decideRate(cfg, pot, pool, event, ctx) {
       mode: 'event-v3:' + (event.name || ''),
       event: { boom: d.boom, center: d.center },
     };
+  }
+
+  /**
+   * 模式 9：幂律（恒定期望）。**必须在空注早退【之上】。**
+   *
+   * 【为什么位置这么关键 —— 这是本模式最重要的一行代码】
+   * 下面有一句 `if (!pot || pot <= 0) return {rate: min + Math.random()*0.9}`，
+   * 它位于【所有 mode 分支之上】。后果是：无人下注的时段根本到不了 mode 9，
+   * 分布变成一个【固定形状的均匀分布 1.10–2.00】，逃 1.11x 的赢面 89%、
+   * EV +0.076/注 —— 深夜 Discord 无人时这是个稳定可套利的区间。
+   * 实测确认：pot=0 时 decideRate 返回 mode='base'，任何 odds_mode 都改不动它。
+   *
+   * 所以幂律分支放在这里：所有局都吃幂律，【无人下注也照常抽】。
+   * 无人局的爆点照常落库 + 广播（engine 里不再因 pot=0 跳过），
+   * 保证公开的爆点历史与真实分布一致 —— 否则历史曲线自己就是一个可辨识信号。
+   *
+   * 【去耦合：这里【不读】 pot / pool / ctx / seated / lastBoom】
+   * 爆点只由 CSPRNG 决定。任何对玩家状态、资金池、上一局爆点的依赖，
+   * 都会让「房间不变 → 分布不变」，重新制造可套利区间。
+   * pool 仍是后台监控指标（engine 照常累计与展示），但不参与定价。
+   */
+  if (mode === '9') {
+    return powerlawDecide(cfg, null);
   }
 
   // 无下注 → 保底区间随机
@@ -679,6 +884,13 @@ function activeEvent(cfg, now = new Date()) {
     return {
       name: ev.name || '限时活动', min: lo, max: hi, weight: w, boom_rate: boomRate,
       width: ev.width,
+      /**
+       * 【2026-09-30】幂律（mode 9）下活动期唯一生效的字段。
+       * 加法幅度，clamp 到 [0, 0.20]，且最终 RTP 硬 clamp 到 1.00。
+       * ⚠️ 非幂律模式下这个字段【完全不被读取】 —— 那些模式仍走 v3 的
+       *    min/max/boom_rate，所以「配了活动但没生效」要按当前模式排查。
+       */
+      rtp_bonus: ev.rtp_bonus,
     };
   }
   return null;
@@ -695,6 +907,18 @@ function activeEvent(cfg, now = new Date()) {
  * @param {number} rounds 模拟局数
  */
 function simulate(cfg, rounds = 10000) {
+  /**
+   * 【mode 9 专用报告】
+   *
+   * 【为什么幂律要单独一套指标，而不是塞进下面的桶】
+   * 下面的 buckets 是给「人为分段的分布表」用的（1.5/10/30/50/80 这些桶界）。
+   * 幂律的核心性质是【毛赔付恒定】，不是「落在哪个桶」。
+   * 报告 EV(m) 才能让运营看见「提高 RTP 会怎样影响所有逃跑点」。
+   */
+  if (String(cfg.odds_mode ?? '4') === '9') {
+    return powerlawReport(cfg, rounds);
+  }
+
   const min = Number(cfg.min_rate) || CFG.MIN_RATE;
   const max = Number(cfg.max_rate) || CFG.MAX_RATE;
   const buckets = new Map();      // 「显示区间」 -> 局数
@@ -755,7 +979,66 @@ function simulate(cfg, rounds = 10000) {
   };
 }
 
+/**
+ * 幂律分布报告 —— 后台「爆点分布预览」与 saveOdds 提示都用它。
+ *
+ * 【报什么、不报什么】
+ * 报：P(X≥m)、毛赔付 P(X≥m)·m（应恒等于 RTP）、净期望 EV(m)、瞬爆率。
+ * 不报：中位/平均倍率当「慷慨程度」的指标 —— 幂律的平均值由尾部主导，
+ * 报出来会让人误以为很慷慨，实际决定玩家盈亏的是毛赔付那一列。
+ */
+function powerlawReport(cfg, rounds = 20000) {
+  const N = Math.max(100, Math.min(200000, Number(rounds) || 20000));
+  const base = normRtp(cfg.powerlaw_rtp);
+  const cap = normCap(cfg.powerlaw_cap);
+  const targets = [1.5, 2, 3, 5, 10, 20, 30, 50, 100, 120].filter((m) => m <= cap);
+
+  const hits = new Map(targets.map((m) => [m, 0]));
+  const capHits = { instant: 0, atCap: 0 };
+  let sum = 0, maxSeen = 0;
+  for (let i = 0; i < N; i++) {
+    const x = powerlawRate(base, cap);
+    sum += x;
+    if (x > maxSeen) maxSeen = x;
+    if (x <= 1.0) capHits.instant++;
+    if (x >= cap) capHits.atCap++;
+    for (const m of targets) if (x >= m) hits.set(m, hits.get(m) + 1);
+  }
+  const vals = targets.map((m) => {
+    const p = hits.get(m) / N;
+    return {
+      target: m,
+      pGe: round4(p),
+      theory: round4(base / m),
+      gross: round4(p * m),              // 不变量①：毛赔付，应 ≈ RTP
+      // 不变量②：净期望。【必须带 (1−P)·(−1) 那一支】
+      // 只算赢的那一支会得出「逃得越高期望越高」的假象（少了一次减一）。
+      ev: round4(p * (payout(1, m) - 1) + (1 - p) * -1),
+    };
+  });
+  return {
+    rounds: N,
+    mode: '9-powerlaw',
+    rtp: round4(base),
+    cap,
+    instantBoom: capHits.instant,
+    instantBoomPct: round2((capHits.instant / N) * 100),
+    instantTheoryPct: round2((1 - base) * 100),
+    atCapPct: round2((capHits.atCap / N) * 100),
+    avg: round2(sum / N),
+    max: round2(maxSeen),
+    targets: vals,
+    evFlat: round4(payout(1, 1) * base - 1),   // 理论净期望，与 m 无关
+    breakevenRtp: round4(1 / payout(1, 1)),      // 1 / 0.97 = 1.0309
+    note: `毛赔付 P(X≥m)×m 对所有 m ≤ ${cap} 恒等于 RTP ${round4(base)}；`
+      + `净期望对所有 m 恒等于 ${round4(payout(1, 1) * base - 1)}（含输掉那一支），`
+      + `因此任何固定逃跑点都不优于其它。保本 RTP = ${round4(1 / payout(1, 1))}，`
+      + `上限 1.00 仍在保本线之下。`,
+  };
+}
+
 module.exports = {
   CFG, flightMs, rateAt, decideRate, activeEvent, payout, round2, sleep,
   toMinutes, tableRate, simulate, beijingParts,
+  powerlawRate, powerlawDecide, powerlawReport, normRtp, normCap, normEventBonus, POWERLAW,
 };
