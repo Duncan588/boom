@@ -503,21 +503,43 @@
 .bet-amt .bet-input::placeholder { color: var(--fg-3); }
 
 /**
- * 梭哈：全部余额，无上限。
- * 高度与金额区一致（52px），橙色警示 —— 和普通下注区分开，
- * 避免误触。余额 <1 时置灰。
+ * 【2026-10-01 客户需求】iOS 风格横向滑块，取代「金额输入 + 梭哈」两行。
+ *
+ * 客户原话：「去掉之前的余额、梭哈这两行，加入这个滑块。拉到底就是全部金额。」
+ * 硬性要求：拉到底 = 【精确等于】全部余额，不留余量。
+ *
+ * 尺寸取 .bet-amt 原基准 52px 高；宽度不写死 280px ——
+ * 客户说「长宽和之前的占比一样，和下单左右上下平行」，
+ * 而 .betbar 本身是块级容器，滑块用 width:100% 即与 #actBtn 同宽。
  */
-.btn-allin {
-  flex: none; height: 52px; min-width: 96px; padding: 0 18px;
-  font-size: 17px; font-weight: 800; letter-spacing: 1px;
-  background: linear-gradient(135deg, rgba(255,107,74,.24), rgba(255,184,108,.20));
-  border: 1px solid rgba(255,107,74,.55); color: #ffb86c;
+.ios-slider {
+  position: relative; width: 100%; height: 52px;
+  border-radius: 18px;
+  background: rgba(255,255,255,.15);
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  overflow: hidden; cursor: pointer;
+  touch-action: none;              /* 拖动不触发页面滚动/缩放 */
+  user-select: none; -webkit-user-select: none;
+  transition: transform .05s ease;
 }
-.btn-allin:hover:not(:disabled) {
-  background: linear-gradient(135deg, rgba(255,107,74,.36), rgba(255,184,108,.28));
-  border-color: rgba(255,107,74,.8);
+.ios-slider:active { transform: scale(.98); }
+.ios-slider-fill {
+  position: absolute; left: 0; top: 0; height: 100%; width: 0%;
+  background: #fff; opacity: .9;
+  transition: width .05s linear;   /* 跟手拖动时几乎无延迟感 */
 }
-.btn-allin:disabled { opacity: .35; cursor: not-allowed; }
+/**
+ * 金额回显。客户要求 4：「金额显示要跟着滑块走」——
+ * 拖动时必须能看到自己拖到了多少。
+ * 压在填充层之上，用 mix-blend-mode 让黑字在白填充上可读、
+ * 在深色空槽上自动转白，不需要按百分比切两套颜色。
+ */
+.ios-slider-label {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 800; letter-spacing: .5px;
+  color: #fff; mix-blend-mode: difference; pointer-events: none;
+}
 
 .stepper {
   flex: 1; display: flex; align-items: center; justify-content: center;

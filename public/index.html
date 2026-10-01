@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>爆点逃跑</title>
-<link rel="stylesheet" href="/css/base.css?v=35">
-<link rel="stylesheet" href="/css/game.css?v=35">
+<link rel="stylesheet" href="/css/base.css?v=36">
+<link rel="stylesheet" href="/css/game.css?v=36">
 <link rel="icon" href="/assets/qun.png">
 </head>
 <body>
@@ -97,12 +97,10 @@
         梭哈 = 全部余额，无上限（超过 10 万在按钮上以 M 显示）。
       -->
       <div class="betbar">
-        <div class="bet-amt">
-          <img class="qun-ic" src="/assets/qun.png" alt="">
-          <input id="betAmt" class="bet-input" type="text" inputmode="numeric"
-                 autocomplete="off" aria-label="下注金额" value="10">
+        <div class="ios-slider" id="betSlider">
+          <div class="ios-slider-fill" id="betSliderFill"></div>
+          <div class="ios-slider-label" id="betSliderLabel">0</div>
         </div>
-        <button class="btn btn-allin" id="btnAllIn">梭哈</button>
       </div>
 
       <button class="btn btn-lg act-btn bet" id="actBtn" disabled>连接中…</button>
@@ -156,7 +154,7 @@
   </div>
 </div>
 
-<script src="/js/chart.js?v=35"></script>
-<script src="/js/app.js?v=35"></script>
+<script src="/js/chart.js?v=36"></script>
+<script src="/js/app.js?v=36"></script>
 </body>
 </html>

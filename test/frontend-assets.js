@@ -49,9 +49,18 @@ const appJs = fs.readFileSync(path.join(PUB, 'js', 'app.js'), 'utf8');
 // ⚠️ 只查【静态 HTML 里就有】的节点。
 // 弹窗（转账/签到/历史等）的节点是 JS 动态生成的，不在 HTML 里 ——
 // 把它们算成「缺失」会产生 11 条假失败。
-// 这里只守住下注区那几个：它们曾经被删过（−/+ 步进），
-// 旧 JS 找不到就会抛 TypeError 并让整个脚本挂掉。
-const BET_IDS = ['betAmt', 'actBtn', 'btnAllIn', 'meName', 'meCoins', 'betsList', 'phase'];
+//
+// 【2026-10-01 更新：金额输入框与梭哈按钮已随 iOS 滑块改版删除】
+// 原来是 ['betAmt','actBtn','btnAllIn',...]。betAmt / btnAllIn 被客户要求
+// 换成滑块，元素真的不在 HTML 里了 —— 这条断言必须跟着改，
+// 否则它会开始断言「必须存在一个已被合法删除的节点」。
+//
+// 而这个闸的【本意】必须保留：它守的是「JS 启动路径引用的每个 id 都真实存在」，
+// 元素不存在时 addEventListener/onclick 会抛 TypeError，整页白屏。
+// 所以现在守的是滑块的三个节点 + 仍然存在的下注区节点。
+// ⚠️ 加滑块节点的同时，也要把 betAmt/btnAllIn 从 app.js 里彻底清干净 ——
+//    那正是这条闸当初要抓的东西，本次已用 grep 确认零残留。
+const BET_IDS = ['betSlider', 'betSliderFill', 'betSliderLabel', 'actBtn', 'meName', 'meCoins', 'betsList', 'phase'];
 const missingBet = BET_IDS.filter((id) => !html.includes(`id="${id}"`));
 t(`下注区 ${BET_IDS.length} 个节点在静态 HTML 里存在`, missingBet.length === 0,
   `缺失：${missingBet.join(', ')}\n       —— 旧缓存的 JS 找不到就抛 TypeError，页面看起来「打不开」`);

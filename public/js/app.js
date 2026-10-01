@@ -566,10 +566,10 @@
     $('#meName').textContent = S.me.name || '玩家';
     $('#meAvatar').src = avatar(S.me);
     $('#meCoins').textContent = fmtC(S.me.coins);
-    // 余额变了要同步梭哈按钮的可用状态
-    syncAllIn();
+    // 余额变了要重绘滑块（百分比与回显都依赖余额）
+    if (typeof renderSlider === 'function') renderSlider();
   }
-  function setCoins(c) { S.me.coins = c; $('#meCoins').textContent = fmtC(c); syncAllIn(); }
+  function setCoins(c) { S.me.coins = c; $('#meCoins').textContent = fmtC(c); if (typeof renderSlider === 'function') renderSlider(); }
 
   /* ---------------- WebSocket ---------------- */
   function connectWS() {
@@ -1273,77 +1273,145 @@
 
   function setBet(v) {
     S.bet = Math.max(BET_MIN, Math.round(v));
-    var inp = $('#betAmt');
-    // 输入框正在被用户编辑时不要回写，否则光标会跳到末尾、打字会很难受。
-    if (inp && document.activeElement !== inp) {
-      inp.value = String(S.bet);
-    }
+    // 滑块的回显由 renderSlider() 负责（金额输入框已随滑块改版删除）。
+    // ⚠️ 这里【不能】直接调 renderSlider —— bindSlider() 会把 setBet 包一层
+    //   来做双向同步，在那之前 renderSlider 可能还未定义/未绑定。
     setBetBtn();
+    if (typeof renderSlider === 'function' && sliderBound) renderSlider();
+  }
+  var sliderBound = false;
+  /**
+   * 【2026-10-01】手动输入金额的三条监听（input / blur / focus）已随
+   * 金额输入框一起删除 —— 元素不存在时 addEventListener 会抛 TypeError，
+   * 抛在启动路径上会让整个页面白屏（这正是「游戏打不开」的成因之一）。
+   * 金额改由滑块承担，拖动即时生效。
+   */
+  /**
+   * 【2026-10-01 客户需求】梭哈按钮已删除，改用 iOS 横向滑块。
+   *
+   * 原来这里是 `$('#btnAllIn').onclick = ...`。
+   * ⚠️ 元素从 index.html 删掉后，$('#btnAllIn') 返回 null，
+   *    直接 onclick 会抛 TypeError 并让整个下注区失效。
+   *    同理下面的 syncAllIn() 也必须一起删 —— 它每次余额刷新都在引用它。
+   */
+
+  /* ---------------- iOS 横向滑块（下注金额） ---------------- */
+  /**
+   * 【2026-10-01 客户需求】iOS 风格横向滑块，取代「余额 + 梭哈」两行。
+   * 客户原话：「拉到底就是全部金额」「滑动也要变更下单金额」。
+   *
+   * 【映射：百分比 → 真实余额】
+   *   0%   = 0
+   *   100% = 【精确等于】S.me.coins（客户强调「拉到底就是全部金额」，
+   *          所以不能 Math.floor、不能留余量、不能 ×0.99）
+   *   中间 = 线性插值
+   * ⚠️ 金额是整数 QUN，所以四舍五入；但 100% 必须走【另一条分支】直接给余额，
+   *    否则 round 会让「全部余额」差 0.5 个 QUN，在大额时肉眼可见。
+   *
+   * 【下限】滑到最左是 0，但真正下注不能是 0 —— setBet() 内的
+   *   Math.max(BET_MIN, …) 保留，所以拖到最左时下注按钮显示「下注 1 QUN」。
+   *   这是客户要求的 6：下限保 1。
+   */
+  function sliderAmount(pct) {
+    var c = (S.me && S.me.coins) || 0;
+    if (c <= 0) return 0;
+    if (pct >= 100) return c;              // ← 拉到底 = 全部金额，精确值
+    return Math.round(c * pct / 100);
+  }
+  /** 百分比 → 金额 → 写回 S.bet + 三处 UI（填充 / 回显 / 下注按钮） */
+  function applySlider(pct) {
+    var p = Math.max(0, Math.min(100, pct));
+    var amt = sliderAmount(p);
+    setBet(amt);                            // setBet 内部保留下限 1
+    renderSlider();
   }
   /**
-   * 手动输入：接受纯数字，也接受用户直接打 K/M/B/T。
-   * '12.5K' 会被解析成 12500 —— 省得用户先算一遍再填。
-   * 边打边把非法字符从框里剔掉（而不是只在状态里忽略），
-   * 否则用户会看到自己打的 'abc' 留在输入框里，但按钮显示 1.00，很困惑。
+   * 渲染滑块。⚠️ 注意 S.bet 与百分比的【双向】关系：
+   * setBet() 也会调这里，而 setBet 可能是由余额变化、结算等触发的，
+   * 那时要把当前金额反算回填充百分比，否则余额一变填充就跳。
    */
-  $('#betAmt').addEventListener('input', function (e) {
-    var el = e.target;
-    var raw = String(el.value).replace(/[^\d.]/g, '');
-    if (raw !== el.value) {
-      var atEnd = el.selectionStart === el.value.length;
-      el.value = raw;
-      if (atEnd) { try { el.setSelectionRange(raw.length, raw.length); } catch (_) {} }
-    }
-    var n = Math.max(BET_MIN, parseInt(raw, 10) || BET_MIN);
-    S.bet = n;
-    setBetBtn();
-  });
-  /**
-   * 失焦时做两件事：把框里内容规范化、把数字换成缩写显示。
-   *
-   * ⚠️ 必须在失焦时才转，不能边打边转 —— 用户打 '1' 会立刻变 '1'，
-   *    打 '2' 变 '12'，打到第 4 位超过 1000 就跳成 '1.23K'，
-   *    后面打的数字直接追加到 'K' 后面，彻底没法输入。
-   *    输入过程中框里始终是纯数字，可以放心连打。
-   *
-   * 失焦时也接受 K/M/B/T 后缀：用户直接打 '12.5K' 会被解析成 12500。
-   */
-  $('#betAmt').addEventListener('blur', function (e) {
-    var v = parseShort(e.target.value);
-    setBet(isNaN(v) ? S.bet : v);
-    e.target.value = fmtShort(S.bet);
-  });
-  // 重新获得焦点时还原成真实数字，否则用户没法在里面改数字
-  $('#betAmt').addEventListener('focus', function (e) {
-    e.target.value = String(S.bet);
-  });
-  /**
-   * 【2026-09-30 第二版】下注区只留「图标 + 金额输入 + 梭哈」。
-   *
-   * 第一版我加了 最小 / 一半 / 最大 三个快捷键，其中「一半」用户根本没要求，
-   * 三个按钮把整行塞满，反而把真正需要的输入区挤成一条缝。已全部删除。
-   *
-   * 梭哈 = 【全部余额，无上限】。之前 Math.floor(S.me.coins) 就是全部，
-   * 问题只是它没有把大数字显示出来 —— 用户看到「梭哈」不知道会压多少。
-   * 所以按钮文字跟着余额走：≥10 万显示成 M（123.4M），否则显示原值。
-   *
-   * ⚠️ 梭哈只填金额不自动提交 —— 误触一次把全部身家压上去代价太高，
-   *    必须让用户自己再点一次下注。
-   */
-  $('#btnAllIn').onclick = function () {
-    if (!S.me) return;
-    setBet(Math.max(1, Math.floor(S.me.coins)));
-  };
-  /**
-   * 梭哈按钮随余额刷新：文案跟着金额走（K/M/B 缩写），余额 <1 时置灰。
-   * 挂在 renderMe() / setCoins() 上 —— 余额每次变化都会经过它们。
-   */
-  function syncAllIn() {
-    var b = $('#btnAllIn');
-    if (!b) return;
+  function renderSlider() {
+    var el = $('#betSlider'), fill = $('#betSliderFill'), lab = $('#betSliderLabel');
+    if (!el || !fill || !lab) return;
     var c = (S.me && S.me.coins) || 0;
-    b.disabled = c < 1;
-    b.textContent = c >= 1000 ? '梭哈 ' + fmtShort(c) : '梭哈';
+    var pct = c > 0 ? Math.max(0, Math.min(100, S.bet / c * 100)) : 0;
+    fill.style.width = pct + '%';
+    // 回显用项目已有的 fmtShort（K/M/B/T），不新增第二套缩写实现
+    lab.textContent = fmtShort(S.bet) + ' QUN';
+    el.setAttribute('aria-valuenow', String(S.bet));
+    el.setAttribute('aria-valuemax', String(c));
+  }
+
+  /**
+   * 跟手拖拽。鼠标 + 触屏双绑（客户参考实现要求）。
+   *
+   * ⚠️【移动端铁律】touchmove 必须 preventDefault()，否则在手机上拖滑块
+   *    会连带滚动页面，手指一动页面就跟着跑。
+   *    另外 CSS 里加了 `touch-action:none`，两者是同一件事的两道保险 ——
+   *    iOS Safari 对 touch-action 支持不完整，preventDefault 不能省。
+   *
+   * ⚠️ 用 Pointer Events 优先？—— 没有用。这里显式绑 mouse/touch 两套，
+   *    因为项目里其他交互（图表拖拽）也是这个写法，保持一致；
+   *    且 Pointer Events 在旧 iOS 上不完整，双绑更稳。
+   */
+  function bindSlider() {
+    var el = $('#betSlider');
+    if (!el) return;
+    var dragging = false;
+
+    /** clientX → 百分比（clamp 0~100），用 getBoundingClientRect 算相对位置 */
+    function pctFromX(clientX) {
+      var r = el.getBoundingClientRect();
+      if (!r || !r.width) return 0;
+      return (clientX - r.left) / r.width * 100;
+    }
+    function onDown(clientX) {
+      if (!(S.me && S.me.coins > 0)) return;   // 没余额不给拖
+      dragging = true;
+      applySlider(pctFromX(clientX));           // 点击也生效，不必先按住拖
+    }
+    function onMove(clientX, e) {
+      if (!dragging) return;
+      if (e && e.cancelable) e.preventDefault();
+      applySlider(pctFromX(clientX));
+    }
+    function onUp() { dragging = false; }
+
+    el.addEventListener('mousedown', function (e) { e.preventDefault(); onDown(e.clientX); });
+    window.addEventListener('mousemove', function (e) { onMove(e.clientX, e); });
+    window.addEventListener('mouseup', onUp);
+
+    el.addEventListener('touchstart', function (e) {
+      var t = e.touches && e.touches[0];
+      if (!t) return;
+      onDown(t.clientX);
+    }, { passive: true });
+    el.addEventListener('touchmove', function (e) {
+      var t = e.touches && e.touches[0];
+      if (!t) return;
+      // ⚠️ 必须 preventDefault：不加就会拖动页面而不是滑块
+      if (e.cancelable) e.preventDefault();
+      onMove(t.clientX, e);
+    }, { passive: false });
+    window.addEventListener('touchend', onUp);
+    window.addEventListener('touchcancel', onUp);
+
+    // 键盘可达性：左右键调 5%，Home/End 到两端（无障碍，且不新增可见控件）
+    el.addEventListener('keydown', function (e) {
+      var c = (S.me && S.me.coins) || 0;
+      if (!c) return;
+      var cur = S.bet / c * 100;
+      if (e.key === 'ArrowLeft')  { applySlider(cur - 5); e.preventDefault(); }
+      else if (e.key === 'ArrowRight') { applySlider(cur + 5); e.preventDefault(); }
+      else if (e.key === 'Home')  { applySlider(0); e.preventDefault(); }
+      else if (e.key === 'End')   { applySlider(100); e.preventDefault(); }
+    });
+
+    // ⌄ 余额/金额任何一方变化都要重绘，否则填充与回显会停在旧值
+    var origSetBet = setBet;
+    setBet = function (v) { origSetBet(v); renderSlider(); };
+    sliderBound = true;
+    renderSlider();
   }
   // 两个独立开关：🎵 背景音乐 / 🔊 音效（互不影响）
   // 用 localStorage 记住选择，刷新后不再被重置为默认开启
@@ -1724,6 +1792,9 @@
   loadSoundPref();
   paintSoundBtns();
   syncClock();
+  // 【2026-10-01】滑块必须在登录前就绑定：它是下注金额的唯一入口，
+  // 且 setBet 的包装也在这里完成。放在启动路径上，元素已存在于 DOM。
+  bindSlider();
   api('/api/me').then(function (r) {
     if (r.j && r.j.discord) window.__DC_ID = r.j.discord.clientId;
     loadChatHistory();     // 载入服务器保留的聊天记录
