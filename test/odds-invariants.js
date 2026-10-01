@@ -21,7 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const G = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
 
-const RTP = Number(process.argv[2] || 1.00);
+const RTP = Number(process.argv[2] || 0.87);
 const CAP = Number(process.argv[3] || 1000);
 const N = Number(process.argv[4] || 2000000);
 const EDGE = G.CFG.HOUSE_EDGE;
@@ -288,7 +288,7 @@ console.log('\n§7 无状态');
     if (!isFinite(v) || v < 1 || v > CAP) bad++;
   }
   ok(bad === 0, '先跑 6000 次其它调用后仍正常（无进程内缓存残留）', bad === 0 ? 'OK' : bad + ' 次越界');
-  ok(G.POWERLAW.RTP_DEFAULT === 1.00, '运营默认 RTP = 1.00', String(G.POWERLAW.RTP_DEFAULT));
+  ok(G.POWERLAW.RTP_DEFAULT === 0.87, '运营默认 RTP = 0.87', String(G.POWERLAW.RTP_DEFAULT));
   ok(G.POWERLAW.CAP_DEFAULT === 1000, '默认 cap = 1000', String(G.POWERLAW.CAP_DEFAULT));
   ok(G.POWERLAW.RTP_MAX === 1.00 && G.POWERLAW.RTP_MIN === 0.80, 'RTP 护栏 [0.80, 1.00] 未动', '');
   ok(G.normRtp(0.5) === 0.80 && G.normRtp(5) === 1.00, 'RTP 越界被夹紧', '');
@@ -332,7 +332,73 @@ console.log('\n§9 一千局整场（逃 1.5x，注 100）');
     '实测 ' + tot.toFixed(0) + ' vs 理论 ' + theory.toFixed(0) + ' = ' + z.toFixed(2) + 'σ');
   let pos = 0;
   for (let b = 0; b < R; b += 50) { let s2 = 0; for (let i = b; i < b + 50; i++) s2 += net(r[i]); if (s2 > 0) pos++; }
-  ok(pos >= 3 && pos <= 17, '20 个 50 局段正负交替（无单向趋势）', pos + ' 正 / ' + (20 - pos) + ' 负');
+  /**
+   * ⚠️【2026-10-01 老板把默认 RTP 从 1.00 改回 0.87，这条阈值随之失效】
+   *
+   * 原来写 `pos >= 3 && pos <= 17`，那组数字是按 RTP=1.00 定的：
+   *   段均值 −150，P(段>0) ≈ 37.9% ⇒ 20 段里期望 7.6 段为正。
+   * 改成 0.87 后段均值变成 −780.5，P(段>0) ≈ 6.2% ⇒ 期望只剩 1.25 段为正。
+   * 于是「1 正 / 19 负」在 0.87 下是【正常结果】，而旧断言必然红。
+   *
+   * ⚠️ 这类「阈值必须跟着分布参数走」的坑，和历史上四个阈值被拍脑袋
+   *   算错是同一类。正确做法是从 binomial 正态近似自己算期望与 σ：
+   *     期望正段 = 20 × P(段>0)，σ = √(20·q·(1−q))
+   *   下界取 max(0, 期望 − 3σ)，上界取 min(20, 期望 + 3σ)。
+   *   0.87 ⇒ 期望 1.25、σ 1.08 ⇒ 3σ 覆盖 [0, 4] —— 实测 1 正正好落在里面。
+   *
+   * 闸的【本意】是「净额没有单向趋势」，而不是「必须有 3 段为正」：
+   * 段期望是负的（庄家优势），正段本来就该是少数，出现少数正段才是对的。
+   */
+  const pBlk = RTP / ESC;
+  const blk = 50;                                  // 每段的局数
+  const blkWin = G.payout(STAKE, ESC) - STAKE;      // 赢一段的净（+45.50）
+  const blkLoss = -STAKE;                            // 输一段的净（−100）
+  /**
+   * ⚠️ 段均值必须用【段局数 blk=50】，不是总局数 R=1000。
+   *    我第一版写的 `STAKE * ((1-EDGE)*RTP-1) * R` 用的是 R，
+   *    于是段均值变成 −15610（真值 −780.5，差 20 倍 = R/blk），
+   *    z 算出 30.7，qPos 被压成 0 ⇒ 3σ 带塌成 [0,0]。
+   *    同一个量在上一条断言里用 R 是对的（那里算的是【总净额】），
+   *    复制过来就错 —— 变量名相同、含义不同，是最难查的一类。
+   */
+  const blkMean = blk * (pBlk * blkWin + (1 - pBlk) * blkLoss);
+  /**
+   * ⚠️ 段 σ 必须是【两点分布的方差】p(1−p)·(赢段−输段)²，
+   *    不能写成 √(n·p·(1−p))·ESC·0.97 ——
+   *    那个式子算的是「倍率」的标准差，不是「净额」的；
+   *    赢段净 +45.50 与输段净 −100 的差是 145.50，差了一个数量级。
+   *    我第一版就写错了：段 σ 被算成 390，真值 507.8 ⇒ z 从 2.0 变 1.54，
+   *    整条 3σ 带跟着错。
+   */
+  const blkSd = Math.sqrt(blk * pBlk * (1 - pBlk) * Math.pow(blkWin - blkLoss, 2));
+  /**
+   * ⚠️ 标准正态 CDF。
+   * ⚠️ 这里【不能】用「0.5 + 从 −8 到 z 的积分」—— 那是错的：
+   *     ∫_{−∞}^{z} φ(t)dt 已经包含了 [−∞, 0] 那 0.5，再加一次就变成 1.0。
+   *     实测那个版本 cdf(0) 返回 1.000000、cdf(1.54) 返回 1.438220，
+   *     于是 1−cdf 得到负概率 → 期望正段数变成负数 → σ 变 NaN。
+   *
+   * 正确写法：从 0 积到 |z|，再用对称性。
+   *     Φ(z) = 0.5 + 0.5·sgn(z)·∫_0^{|z|} φ(t)dt
+   * 数值积分用 Simpson（n=200 区间，对这个取值精度绰绰有余）。
+   */
+  function normCdf(z) {
+    const f = (t) => Math.exp(-t * t / 2);
+    const az = Math.abs(z);
+    const n = 200, h = az / n;
+    let s = f(0) + f(az);
+    for (let i = 1; i < n; i++) s += f(i * h) * (i % 2 ? 4 : 2);
+    const half = (s * h / 3) / Math.sqrt(2 * Math.PI);   // ∫_0^{|z|} φ
+    return z >= 0 ? 0.5 + half : 0.5 - half;
+  }
+  const qPos = Math.max(1e-9, Math.min(1, 1 - normCdf((0 - blkMean) / blkSd)));
+  const blocks = R / 50;
+  const expPos = blocks * qPos;
+  const sdPos = Math.sqrt(blocks * qPos * (1 - qPos));
+  const loPos = Math.max(0, Math.round(expPos - 3 * sdPos));
+  const hiPos = Math.min(blocks, Math.round(expPos + 3 * sdPos));
+  ok(pos >= loPos && pos <= hiPos, '正段数落在 3σ 带内（阈值随 RTP 推导，不是拍脑袋）',
+    `${pos} 正 / ${blocks - pos} 负，期望 ${expPos.toFixed(2)}，3σ 带 [${loPos}, ${hiPos}]`);
   let run = 0, mx = 0;
   for (let i = 0; i < R; i++) { if (r[i] < ESC) { run++; if (run > mx) mx = run; } else run = 0; }
   ok(mx <= 10, '连续低于逃 1.5x 最长 ≤ 10 局（随机尾部）', mx + ' 局');

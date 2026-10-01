@@ -176,9 +176,10 @@ ok(atCap > 0, '上限之上确实存在被截断的质量（不是永远撞不�
 ok(normRtp(0.01) === POWERLAW.RTP_MIN, 'RTP 下限 0.80 生效', String(normRtp(0.01)));
 ok(normRtp(5) === POWERLAW.RTP_MAX, 'RTP 上限 1.00 生效（超过会给所有人保证盈利）', String(normRtp(5)));
 ok(normRtp('abc') === POWERLAW.RTP_DEFAULT, '非法 RTP 落到默认 ' + POWERLAW.RTP_DEFAULT, String(normRtp('abc')));
-// ⚠️ 这条钉住「默认值不会悄悄漂移」。1.00 是 2026-10-01 定稿的运营默认值
-// 改动它必须连同注释、admin 文案、migrate 脚本默认值一起改，不能只改数字。
-ok(POWERLAW.RTP_DEFAULT === 1.00, '运营默认 RTP = 1.00（改动需同步四处）', String(POWERLAW.RTP_DEFAULT));
+// ⚠️ 这条钉住「默认值不会悄悄漂移」。0.87 是老板 2026-10-01 定案的运营默认值
+// （曾一度写成 1.00，同日老板拍板改回）。改动它必须连同注释、
+// admin 文案、migrate 脚本默认值一起改，不能只改数字。
+ok(POWERLAW.RTP_DEFAULT === 0.87, '运营默认 RTP = 0.87（老板 2026-10-01 定案）', String(POWERLAW.RTP_DEFAULT));
 ok(POWERLAW.CAP_DEFAULT === 1000, '倍率上限默认 = 1000', String(POWERLAW.CAP_DEFAULT));
 
 // ---- §5 不用 Math.random ----
