@@ -168,8 +168,16 @@ t('chart.js 不含本地反算公式（已剥注释）',
 t('该公式只出现在注释里（说明是留档不是活代码）',
   chart.indexOf('rate = t/2 + (t*t-t)/10 + 1') >= 0);
 t('chart.js 从 st.rate 取倍率', /st\.rate/.test(chart));
-t('pushSample 对重复采样点去重（60fps 不会膨胀）',
-  /pushSample[\s\S]{0,500}last\.sec - sec/.test(chart));
+/**
+ * ⚠️【2026-10-02】这条原本靠匹配 `last.sec - sec` 这段字面写法，
+ *   修膨胀时去重改成「按 100ms 桶覆盖」，写法变了 ⇒ 全红。
+ *   真正的判据（膨胀率必须 = 1）现在由 test/sample-bloat.js 用
+ *   【真实 setState 路径】量（13/13），那才是行为判据。
+ */
+t('pushSample 有去重/合并逻辑（不逐帧累加新点）',
+  /pushSample = function[\s\S]{0,2500}(STEP_SEC|last\.sec - sec)/.test(chart));
+t('⚠️ 真正的「1 点 = 1 tick」判据在 test/sample-bloat.js，不在本文件',
+  fs.existsSync(path.join(ROOT, 'test', 'sample-bloat.js')));
 
 console.log('\n' + (fail ? '❌' : '✅') + ' 通过 ' + pass + ' / 失败 ' + fail);
 process.exit(fail ? 1 : 0);

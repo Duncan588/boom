@@ -46,7 +46,7 @@ t('第一条采样点来自服务端 tick 的真实 sec（不是本地反算）'
 t('没有用 while 循环按 STEP_MS 本地补点',
   !/while\s*\(this\.samples\.length\s*</.test(chart));
 t('去重逻辑仍在（60fps 不会让 samples 6 倍膨胀）',
-  /last\.sec - sec\)\s*<\s*1e-6/.test(chart));
+  /STEP_SEC/.test(chart) || /last\.sec - sec\)\s*<\s*1e-6/.test(chart));
 
 console.log('\n=== 数量仍然有界（每帧遍历 1400 个点可接受）===');
 t('保留上限是有限常量', KEEP > 0 && KEEP <= 5000, KEEP + ' 个点');
