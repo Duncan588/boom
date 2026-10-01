@@ -155,14 +155,31 @@ ok(sorted[0] >= 1, '最小倍率 ≥ 1.00', String(sorted[0]));
 ok(sorted[N - 1] <= CAP + 1e-9, '最大倍率 ≤ 上限', String(sorted[N - 1]));
 const atCap = sorted.filter((v) => v >= CAP).length / N;
 const inst = sorted.filter((v) => v <= 1).length / N;
-console.log(`   触顶 ${(atCap * 100).toFixed(3)}%　瞬爆 ${(inst * 100).toFixed(2)}%（理论 ${((1 - RTP) * 100).toFixed(2)}%）`);
-ok(Math.abs(inst - (1 - RTP)) < 0.01, '瞬爆率 ≈ 1 − RTP（由公式自然产生）', `${(inst * 100).toFixed(2)}%`);
+/**
+ * ⚠️ 瞬爆率的【精确】公式是 1 − RTP/1.01，不是 1 − RTP。
+ *
+ * powerlawRate() 先 floor 到分再 max(1,·)，所以 X 恰好等于 1.00 的条件是
+ *     floor(RTP/U × 100) ≤ 100  ⇔  RTP/U < 1.01  ⇔  U > RTP/1.01
+ * 而 U 均匀分布在 (0,1) 上，所以 P(X = 1.00) = 1 − RTP/1.01。
+ *
+ * RTP=0.97 时旧公式给 3.00%，精确值是 3.96% —— 差 0.96 个百分点。
+ * 第一版把判据写成 1−RTP，容差又被放到 0.02，于是这个系统性偏差
+ * 长期藏在容差里：测试一直绿，但报的数是错的。
+ * 正确的做法是把理论值换成闭式解，容差收紧到采样噪声量级。
+ */
+const BOOM_THEORY = 1 - RTP / 1.01;
+console.log(`   触顶 ${(atCap * 100).toFixed(3)}%　瞬爆 ${(inst * 100).toFixed(2)}%（理论 ${(BOOM_THEORY * 100).toFixed(2)}% = 1 − RTP/1.01）`);
+ok(Math.abs(inst - BOOM_THEORY) < 0.005, '瞬爆率 ≈ 1 − RTP/1.01（精确闭式，不是 1 − RTP）', `${(inst * 100).toFixed(2)}%`);
 ok(atCap > 0, '上限之上确实存在被截断的质量（不是永远撞不到 cap）');
 
 // RTP 上下限
 ok(normRtp(0.01) === POWERLAW.RTP_MIN, 'RTP 下限 0.80 生效', String(normRtp(0.01)));
 ok(normRtp(5) === POWERLAW.RTP_MAX, 'RTP 上限 1.00 生效（超过会给所有人保证盈利）', String(normRtp(5)));
-ok(normRtp('abc') === POWERLAW.RTP_DEFAULT, '非法 RTP 落到默认 0.97', String(normRtp('abc')));
+ok(normRtp('abc') === POWERLAW.RTP_DEFAULT, '非法 RTP 落到默认 ' + POWERLAW.RTP_DEFAULT, String(normRtp('abc')));
+// ⚠️ 这条钉住「默认值不会悄悄漂移」。0.87 是老板 2026-10-01 定的运营默认值，
+// 改动它必须连同注释、admin 文案、migrate 脚本默认值一起改，不能只改数字。
+ok(POWERLAW.RTP_DEFAULT === 0.87, '运营默认 RTP = 0.87（改动需同步四处）', String(POWERLAW.RTP_DEFAULT));
+ok(POWERLAW.CAP_DEFAULT === 1000, '倍率上限默认 = 1000', String(POWERLAW.CAP_DEFAULT));
 
 // ---- §5 不用 Math.random ----
 console.log('\n=== §5 随机源 ===');
@@ -214,10 +231,10 @@ console.log(`   2000 局的不同值 ${distinct}（${(distinctPct * 100).toFixed
  */
 ok(distinctPct > 0.15, '不同值占比 > 15%（不是常量/少数值循环）', `${(distinctPct * 100).toFixed(1)}%`);
 
-// 1.00x 的占比应等于 1−RTP（瞬爆），这是公式的自然结果
+// 1.00x 的占比应等于 1−RTP/1.01（瞬爆）。见 §4 里 BOOM_THEORY 的推导。
 const oneCount = seq.filter((v) => v === 1).length / seq.length;
-console.log(`   1.00x（瞬爆）占比 ${(oneCount * 100).toFixed(2)}%（理论 1−RTP = ${((1 - RTP) * 100).toFixed(2)}%）`);
-ok(Math.abs(oneCount - (1 - RTP)) < 0.02, '1.00x 的占比 ≈ 1 − RTP（由 max(1,·) 兜底产生）',
+console.log(`   1.00x（瞬爆）占比 ${(oneCount * 100).toFixed(2)}%（理论 1−RTP/1.01 = ${((1 - RTP / 1.01) * 100).toFixed(2)}%）`);
+ok(Math.abs(oneCount - (1 - RTP / 1.01)) < 0.015, '1.00x 的占比 ≈ 1 − RTP/1.01（由 floor 量化 + max(1,·) 共同产生）',
   `${(oneCount * 100).toFixed(2)}%`);
 
 // 相邻完全相同的比例：应有下限（1.00 独占约 4%）但不该高
