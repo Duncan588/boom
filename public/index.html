@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>爆点逃跑</title>
-<link rel="stylesheet" href="/css/base.css?v=37">
-<link rel="stylesheet" href="/css/game.css?v=37">
+<link rel="stylesheet" href="/css/base.css?v=38">
+<link rel="stylesheet" href="/css/game.css?v=38">
 <link rel="icon" href="/assets/qun.png">
 </head>
 <body>
@@ -105,6 +105,17 @@
 
       <button class="btn btn-lg act-btn bet" id="actBtn" disabled>连接中…</button>
 
+      <!--
+        【2026-10-02 客户要求】弹幕输入框从右栏移到下注区正下方。
+        原因：手机端玩家要发言不必往下翻，首屏就能点。
+        右栏只保留「看」（#chatList 消息列表），这里管「说」。
+        三个 id 不能改 —— app.js 全靠它们查找元素。
+      -->
+      <form class="chat-input" id="chatForm">
+        <input id="chatText" maxlength="120" placeholder="说点什么…" autocomplete="off">
+        <button class="btn btn-sm" type="submit" id="chatSend">发送</button>
+      </form>
+
       <div style="height:10px"></div>
       <div class="bets-head"><span>玩家</span><span>逃跑</span><span>投入</span><span>盈亏</span></div>
       <div class="bets" id="betsList"><div class="bets-empty">等待玩家下注…</div></div>
@@ -118,10 +129,6 @@
           <span class="chip" id="onlineChip">在线 0</span>
         </div>
         <div class="chat" id="chatList"></div>
-        <form class="chat-input" id="chatForm">
-          <input id="chatText" maxlength="120" placeholder="说点什么…" autocomplete="off">
-          <button class="btn btn-sm" type="submit" id="chatSend">发送</button>
-        </form>
       </div>
 
       <div class="stage" style="padding:14px 12px;margin-top:12px">
@@ -154,7 +161,7 @@
   </div>
 </div>
 
-<script src="/js/chart.js?v=37"></script>
-<script src="/js/app.js?v=37"></script>
+<script src="/js/chart.js?v=38"></script>
+<script src="/js/app.js?v=38"></script>
 </body>
 </html>
