@@ -11,8 +11,16 @@
  * 用法：
  *   node scripts/migrate-powerlaw.js                    # 只看当前值与目标值
  *   node scripts/migrate-powerlaw.js --apply            # 写入 powerlaw_rtp / powerlaw_cap
- *   node scripts/migrate-powerlaw.js --apply --force    # 连 odds_mode 一起切到 9
+ *   node scripts/migrate-powerlaw.js --apply --force    # 连 odds_mode 一起切到 9（幂律）
+ *   node scripts/migrate-powerlaw.js --apply --force --mode=10   # 切到 10（高倍率零套利）
  *   node scripts/migrate-powerlaw.js --apply --force --rtp=0.95 --cap=200
+ *
+ * ⚠️ --mode 的两个合法值：
+ *    9  幂律 · 恒定期望 —— 所有逃跑点净期望完全相同，RTP 生效
+ *    10 高倍率 · 零套利 —— 中位数 2.03x（比 9 的 1.80x 高），
+ *       放弃「等期望」换观感，但毛赔付处处 < 1.0309 仍然无套利。
+ *       它的分布参数是代码里的静态常数，【不读 powerlaw_rtp / powerlaw_cap】。
+ *    1–8 的实现已删除，写进去会静默落到 base 分支，所以脚本会拒绝。
  *
  * ⚠️ 部署顺序：先跑本脚本（写配置），【再】重启服务。
  *    顺序反了的话，进程读到的是旧配置，而 DEFAULT_SETTINGS 也不会补写
@@ -32,6 +40,19 @@ const argOf = (name, def) => {
 const RTP = argOf('rtp', '0.90');
 const CAP = argOf('cap', '1000');
 const ACTIVITY_BONUS = argOf('bonus', '0.03');
+/**
+ * 目标赔率模式。默认 9（幂律）；传 --mode=10 切「高倍率 · 零套利」。
+ * ⚠️ 必须校验白名单：odds_mode 是【引擎分派键】，写错一个不存在的值
+ *    不会报错，只会让所有局的 mode 落到 base 分支（历史上真实发生过）。
+ */
+const MODE = argOf('mode', '9');
+if (!['9', '10'].includes(MODE)) {
+  console.error(`✗ --mode 必须是 9 或 10（收到 ${MODE}）。`);
+  console.error('    9  = 幂律 · 恒定期望（所有逃跑点净期望相同）');
+  console.error('    10 = 高倍率 · 零套利（中位数 2.03x，放弃等期望但仍无套利区）');
+  console.error('    1–8 的实现已在 6e0a34d 删除，写进去会落到 base 分支。');
+  process.exit(1);
+}
 
 // 校验：不合法就直接退出，不让坏值进库
 const rtpN = Number(RTP), capN = Number(CAP), bonusN = Number(ACTIVITY_BONUS);
@@ -66,8 +87,14 @@ const PLAN = {
   // 每日高倍活动在幂律下的加成（+RTP，形状不变）
   daily_rtp_bonus: String(bonusN),
 };
-// 只有 --force 才动 odds_mode —— 它决定整局节奏，不该被迁移脚本悄悄改掉
-if (FORCE) PLAN.odds_mode = '9';
+// 只有 --force 才动 odds_mode —— 它决定整局节奏，不该被迁移脚本悄悄改掉。
+// ⚠️ --mode=10 切的是「高倍率 · 零套利」引擎（server/shaped-rate.js）。
+//    它与 mode 9 的差别是：mode 9 保证「所有逃跑点净期望完全相同」，
+//    mode 10 放弃那条性质换取更高中位数（1.80x → 2.03x），但仍是零套利
+//    （毛赔付处处 < 1.0309）。mode 10 的分布参数是代码里的静态常数，
+//    所以它不读 powerlaw_rtp / powerlaw_cap —— 那两个键对它无影响，
+//    脚本仍然会写（幂等、无副作用），只是不会被 mode 10 读取。
+if (FORCE) PLAN.odds_mode = MODE;
 
 const show = ['odds_mode', 'min_rate', 'max_rate', 'powerlaw_rtp', 'powerlaw_cap',
   'daily_rtp_bonus', 'daily_enabled', 'events_json', 'activities'];
