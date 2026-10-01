@@ -70,21 +70,41 @@ for (let c = 100; c <= 1000; c *= 1.03) grid.push(+Math.min(CAP, c).toFixed(2));
 
 let maxZ = 0, maxZc = 0, evMin = Infinity, evMax = -Infinity, evMinC = 0, evMaxC = 0;
 let viol = [];
+let thin = [];   // 样本不足的点：照常打印，但不算判据
 for (const c of grid) {
   const P = S(c);
   if (P === 0) continue;
   const ev = (1 - EDGE) * c * P - 1;
   const sigma = c * (1 - EDGE) * Math.sqrt(P * (1 - P) / N);
+  // ⚠️ 样本充分性闸：尾部点的 σ 本身就有几个百分点，在那个分辨率下
+  //   「偏差 > 3σ」不是性质结论，只是噪声。RTP=1.00 cap=1000 实测：
+  //     865.2x 在 N=100万 只有 1156 次命中，3σ 相对误差 8.82%
+  //   所以它报出「3.04σ」看着像超标，其实 N 要到 7800 万才分辨得出来。
+  //   不做这个标注，读的人会把噪声当缺陷 —— 我第一版就是这么误导的。
+  //   判据：3σ 相对误差 > 3% 视为样本不足，照常打印但不计进 maxZ / viol。
+  const relSigma = 3 * Math.sqrt((1 - P) / (N * P));
+  const enough = relSigma <= 0.03;
   const z = (ev - EV_THEORY) / sigma;
-  if (Math.abs(z) > Math.abs(maxZ)) { maxZ = z; maxZc = c; }
+  if (enough && Math.abs(z) > Math.abs(maxZ)) { maxZ = z; maxZc = c; }
   if (ev < evMin) { evMin = ev; evMinC = c; }
   if (ev > evMax) { evMax = ev; evMaxC = c; }
-  if (Math.abs(z) > 3) viol.push({ c, z, ev });
+  if (enough && Math.abs(z) > 3) viol.push({ c, z, ev });
+  if (!enough) thin.push({ c, z, ev, relSigma, hits: P * N });
 }
 console.log(`  网格点数 = ${grid.length}（1.01→${CAP}x，对数加密）`);
 console.log(`  净 EV 极差 = ${((evMax - evMin) * 100).toFixed(3)} 个百分点（最高 ${evMaxC.toFixed(2)}x，最低 ${evMinC.toFixed(2)}x）`);
 console.log(`  全网格最大 |偏差| = ${Math.abs(maxZ).toFixed(2)}σ @ ${maxZc.toFixed(2)}x（判据 ≤3σ）`);
 console.log(`  超 3σ 的点 = ${viol.length} 个 ${viol.length ? '← ' + viol.slice(0, 5).map(v => v.c.toFixed(2) + 'x:' + v.z.toFixed(1) + 'σ').join(' ') : '（通过）'}`);
+if (thin.length) {
+  console.log(`\n  ⚠️ 样本不足、【不计入判据】的点 = ${thin.length} 个（N=${N.toLocaleString()} 下 3σ 相对误差 >3%）：`);
+  console.log('     这些点报出的 z 值是【采样噪声】，不是分布性质。RTP=1.00/cap=1000 时尾部需要 N≈7800 万才分辨得出来。');
+  console.log('     点位        命中次数     3σ相对误差    z值      说明');
+  for (const t of thin.slice(0, 12)) {
+    console.log('  ' + (t.c.toFixed(2) + 'x').padStart(10) + t.hits.toFixed(0).padStart(12) +
+      (t.relSigma * 100).toFixed(2).padStart(12) + '%' + (t.z >= 0 ? '+' : '') + t.z.toFixed(2).padStart(9) + '   样本不足');
+  }
+  if (thin.length > 12) console.log('     … 另有 ' + (thin.length - 12) + ' 个');
+}
 
 // 尾部单独看（尾部 σ 天然大，需要分开陈述）
 console.log('\n  尾部抽样明细（这些点的 σ 本身很大，单看极差会误导）：');
