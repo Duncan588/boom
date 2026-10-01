@@ -210,11 +210,16 @@ async function waitRounds(n, timeoutMs = 45000) {
    * 造一个「只在活动期可辨识」的形状，那正是本次要根除的东西。
    * 所以这里能断言的是：活动照常开、照常有横幅，而爆点仍在幂律范围内。
    */
-  const rtp0 = Number((await req('/admin/api/settings')).settings.powerlaw_rtp) || 0.97;
-  ok(evRounds.length > 0 && evRounds.every((r) => r.boom >= 1 && r.boom <= 120),
+  const cfgNow = (await req('/admin/api/settings')).settings;
+  const rtp0 = Number(cfgNow.powerlaw_rtp) || 0.87;
+  // ⚠️ 【2026-10-01 修】上限不能写死 120。cap 已经改成 1000，写死会让这条断言
+  // 随抽样随机变红（>120 的局本来是合法的），而「偶发红」会被误当成引擎坏了。
+  // 该断言的正确形状是「爆点落在【当前配置的上限】之内」—— 读配置，不是读常量。
+  const capNow = Number(cfgNow.powerlaw_cap) || 1000;
+  ok(evRounds.length > 0 && evRounds.every((r) => r.boom >= 1 && r.boom <= capNow),
     '幂律下活动不改变倍率区间（爆点仍在幂律范围内）',
-    evRounds.map((r) => r.boom).join(','));
-  console.log(`  （活动 min=5/max=50 在幂律下不生效，只加 RTP；当前 RTP=${rtp0}）`);
+    `上限=${capNow}，实测=${evRounds.map((r) => r.boom).join(',')}`);
+  console.log(`  （活动 min=5/max=50 在幂律下不生效，只加 RTP；当前 RTP=${rtp0} / cap=${capNow}）`);
   await req('/admin/api/settings', { body: { events_json: '[]' } });
 
   ws.close();

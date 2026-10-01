@@ -11,10 +11,29 @@
  */
 const WebSocket = require('ws');
 
-const HTTP = 'http://127.0.0.1:8080';
-const WS = 'ws://127.0.0.1:9501/ws';
-let pass = 0, fail = 0;
+const arg = (k, d) => {
+  const hit = process.argv.find((a) => a.startsWith('--' + k + '='));
+  return hit ? hit.slice(k.length + 3) : d;
+};
+const HTTP = arg('http', 'http://127.0.0.1:8080');
+const WS = arg('ws', 'ws://127.0.0.1:9501/ws');
+/**
+ * ⚠️ 瞬爆局上这个测试的【核心断言】在结构上必然假红。
+ *
+ * 它要验的是「A 逃跑时 me:true 只发给 A」，所以前提是 A 真的逃成了。
+ * 但 cap=1000 时瞬爆率约 3.96%，那些局 flightMs(1.00)=0ms，起飞即爆，
+ * A 根本按不到逃跑按钮 —— 于是 `escA.some(e => e.me === true)` 为假，
+ * 报「A 没收到 me:true」，而引擎完全正确。
+ *
+ * 也就是说：这脚本不是偶尔红，是【每撞上瞬爆局就红一次】，而那由随机分布
+ * 决定，看起来像偶发。正确做法是把这局记为 SKIP，换下一局继续试，
+ * 直到拿到一局倍率 ≥ ESCAPE_AT 的。不要为了变绿去改引擎或加保底飞行时间。
+ */
+const ESCAPE_AT = 1.5;
+const MAX_ATTEMPTS = Number(arg('attempts', 12));   // 撞上瞬爆局的概率 ~4%，12 局足够
+let pass = 0, fail = 0, skipped = 0;
 const ok = (n, c, extra) => { c ? pass++ : fail++; console.log((c ? '✅' : '❌') + ' ' + n + (extra ? '  ' + extra : '')); };
+const skip = (n, why) => { skipped++; console.log('⏭  ' + n + '  ' + why); };
 
 async function login(discordId) {
   const r = await fetch(`${HTTP}/api/auth/dev-login`, {
@@ -72,32 +91,28 @@ const latest = (msgs, t) => msgs.filter(m => m.type === t).pop();
   let flew = false;
   for (let i = 0; i < 80 && !flew; i++) { await wait(500); flew = !!latest(A.msgs, 'takeoff'); }
   ok('进入飞行阶段', flew);
-  if (!flew) { console.log('A 消息类型:', [...new Set(A.msgs.map(m => m.type))].join(',')); }
+  if (!flew) { console.log('A 消息类型:', [...new Set(A.msgs.map(m => m.type))].join(',')); process.exit(1); }
 
-  // 等 1.5 秒让倍率涨起来
-  await wait(1500);
+  /**
+   * ⚠️ 这里原来写死 `await wait(1500)`。
+   *
+   * 瞬爆局 flightMs(1.00) = 0ms —— 起飞那一瞬就爆了。固定等 1.5 秒之后
+   * 请求，局早已结束，API 返回「当前不可逃跑」。实测 gid=16/17 都是 1.00x，
+   * 两局全红。这不是偶发：cap=1000 时瞬爆率约 3.96%，所以这脚本
+   * 大约每 25 局就必然红一次，而它是随机命中的，看起来像「偶发」。
+   *
+   * 正确写法：跟着 tick 走（服务端每 100ms 推一次当前倍率），
+   * 见到 ≥ 1.5x 立刻发请求；见到 over 就放弃（这局爆得太早，逃不掉）。
+   * 这样写同时对瞬爆局和长局都成立，且不依赖任何总时长。
+   */
+  const escResult = await escapeAtTick(A.ws, ckA, gid);
+  if (escResult.boom) skip('A 逃跑成功', '瞬爆局');
+  else ok('A 逃跑成功', escResult.body && escResult.body.ok === true, JSON.stringify(escResult.body).slice(0, 90));
 
-  // A 逃跑
-  const escR = await fetch(`${HTTP}/api/game/escape`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: ckA },
-    body: JSON.stringify({ roundId: gid }),
-  }).then(r => r.json()).catch(e => ({ error: e.message }));
-  ok('A 逃跑成功', escR.ok === true, JSON.stringify(escR).slice(0, 90));
-  await wait(1200);
-
-  // 核心断言
-  const escB = B.msgs.filter(m => m.type === 'escape');
-  const escA = A.msgs.filter(m => m.type === 'escape');
-  console.log('');
-  console.log('A 收到的 escape:', JSON.stringify(escA.map(e => ({ uid: e.uid, me: e.me }))));
-  console.log('B 收到的 escape:', JSON.stringify(escB.map(e => ({ uid: e.uid, me: e.me }))));
-
-  ok('A（逃跑者）收到 me:true', escA.some(e => e.me === true));
-  // B 应该收到【公开】的逃跑事件（下注列表要显示 A 逃了、飘字），
-  // 但绝不能带 me:true —— 带了就会弹「逃跑成功」toast 并锁死自己的逃跑按钮。
-  ok('B 收到公开 escape（用于更新列表）', escB.length === 1, `B 收到 ${escB.length} 条`);
-  ok('B 的 escape 不带 me:true（不弹 toast、不锁按钮）', !escB.some(e => e.me === true));
-  ok('A 只收到 1 条 me:true（不重复）', escA.filter(e => e.me === true).length === 1);
+  // 核心断言 —— 瞬爆局上 A 没逃成，这些断言无法成立，跳过（不是失败）
+  if (escResult.boom) skip('me:true 定向隔离（4 项）', '本局无逃跑事件可验');
+  else assertIsolation(A.msgs, B.msgs);
+  return !escResult.boom;   // true = 这局验到了真东西，可以收工
 
   // B 能否继续：下一局 B 自己下注并逃跑，验证没被 A 的逃跑锁死
   let gid2 = null;

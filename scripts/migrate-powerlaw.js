@@ -29,8 +29,8 @@ const argOf = (name, def) => {
   return hit ? hit.split('=')[1] : def;
 };
 
-const RTP = argOf('rtp', '0.97');
-const CAP = argOf('cap', '120');
+const RTP = argOf('rtp', '0.87');
+const CAP = argOf('cap', '1000');
 const ACTIVITY_BONUS = argOf('bonus', '0.03');
 
 // 校验：不合法就直接退出，不让坏值进库

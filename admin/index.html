@@ -356,7 +356,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         对任意逃跑目标 m，P(爆点 ≥ m) = RTP ÷ m，所以毛赔付与净期望对所有
         m 完全相同 —— <b>没有任何逃跑点更划算，也没有稳定赚钱的区间</b>。<br>
         随机源是 <code>crypto.randomBytes</code>，不是 <code>Math.random</code>。
-        瞬爆（约 3%）由公式自然产生，不需要单独配置。<br>
+        瞬爆（<b>1 − RTP</b>，RTP 0.87 时为 <b>13%</b>）由公式自然产生，不需要单独配置。<br>
         <b>下表的 min_rate / max_rate 在本模式下不参与定价</b>，请用下面两个参数。
         </span>
       </div>
@@ -373,9 +373,11 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         </div>
         <div class="hint" style="margin-top:6px">
           RTP 决定玩家长期每注期望亏损 = 0.97 × RTP − 1。
-          RTP 0.97 时为 <b>−5.91%</b>；RTP 1.00 时为 −3.00%。
+          RTP <b>0.87</b> 时为 <b>−15.61%</b>；RTP 1.00 时为 −3.00%。
           硬上限 1.00（保本线是 1.0309，越线等于给所有人保证盈利）。
           活动时段只会在此基础上<b>加</b> RTP，形状不变。
+          <br>⚠️ <b>−15.61% 是「每注长期期望」，不是「玩一局亏 15%」</b> ——
+          玩家实际看到的是中位数 1.74x、瞬爆 13%。
         </div>
         <div id="w9Preview" class="hint" style="margin:6px 0 2px"></div>
       </div>
@@ -992,7 +994,7 @@ function loadSettings(){
        仍需读取 min_rate / max_rate —— 它们是安全护栏，见下。 */
     $('#s_min').value=s.min_rate||1.10;
     $('#s_max').value=s.max_rate||50;
-      // 模式 9（幂律）参数。留空显示为占位符默认 0.97 / 120。
+      // 模式 9（幂律）参数。留空显示为占位符默认 0.87 / 1000。
       var s9r = $('#s9_rtp'), s9c = $('#s9_cap');
       if (s9r) s9r.value = s.powerlaw_rtp!=null && s.powerlaw_rtp!=='' ? s.powerlaw_rtp : '';
       if (s9c) s9c.value = s.powerlaw_cap!=null && s.powerlaw_cap!=='' ? s.powerlaw_cap : '';
@@ -1544,9 +1546,12 @@ function w9Preview(){
   if (!el) return;
   var rtpV = parseFloat(($('#s9_rtp')||{}).value);
   var capV = parseFloat(($('#s9_cap')||{}).value);
-  var rtp = isFinite(rtpV) ? Math.max(0.80, Math.min(1.00, rtpV)) : 0.97;
-  var cap = isFinite(capV) && capV >= 1.01 ? capV : 120;
-  var N = 40000, hits = {}, targets = [1.5,2,3,5,10,20,30,50,100,120].filter(function(m){return m<=cap;});
+  var rtp = isFinite(rtpV) ? Math.max(0.80, Math.min(1.00, rtpV)) : 0.87;
+  var cap = isFinite(capV) && capV >= 1.01 ? capV : 1000;
+  // 【2026-10-01】目标点跟着 cap 上限走：cap=1000 时必须能看到 125/500/1000 这几档，
+  // 否则预览只到 120x，运营会以为上限配错了（这正是 §15b「不可达」那个盲点的
+  // 前端版本 —— 上面有采样，下面却没有对应的观察点）。
+  var N = 40000, hits = {}, targets = [1.5,2,3,5,10,20,30,50,100,125,200,500,1000].filter(function(m){return m<=cap;});
   targets.forEach(function(m){ hits[m] = 0; });
   var inst = 0, atCap = 0;
   for (var i = 0; i < N; i++) {
@@ -1635,7 +1640,7 @@ $('#btnSaveOdds').onclick=function(){
    *
    * ⚠️ 同样遵循「只在当前模式下提交」的规则：留空就【不提交这个键】，
    *    而不是提交 ''。提交空串会把 RTP 变成 0 → normRtp 落到 0.80 下限
-   *    （配置本身合法但完全不是运营的意思），而「没配」应该走引擎默认 0.97。
+   *    （配置本身合法但完全不是运营的意思），而「没配」应该走引擎默认 0.87。
    *    留空即默认 —— 与 slot_boom_rate 的处理方式一致。
    */
   if (mode === '9') {

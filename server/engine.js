@@ -187,7 +187,7 @@ class Engine {
        * 快照，活动读 db 拿到的是【那一刻】的值，两者可能不一致
        * （本局内配置被改过）—— 那正是「活动 RTP 以哪一局为准」的老问题。
        */
-      powerlawRtp: Number(cfg.powerlaw_rtp) || 0.97,
+      powerlawRtp: Number(cfg.powerlaw_rtp) || 0.87,
     });
     if (act.activityLabel) {
       console.log(`[activity] 本局生效: ${act.activityLabel}`);

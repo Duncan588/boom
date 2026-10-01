@@ -416,13 +416,15 @@ const DEFAULT_SETTINGS = {
    * powerlaw_rtp  返还率，范围 0.80–1.00，硬上限 1.00（见 POWERLAW.RTP_MAX：
    *                 超过 1.00 时任意有限逃跑点都是正期望 = 给所有人保证盈利）。
    *                 对任意逃跑目标 m，P(X ≥ m) = RTP / m ⇒ 毛赔付恒为 RTP。
-   * powerlaw_cap  倍率上限，默认 120。
+   * 【2026-10-01 更新】powerlaw_rtp 默认 0.87，powerlaw_cap 默认 1000。
+   * ⚠️ 0.87 的净期望是 −15.61%/注，别在报告里写成「玩家体感亏 15%」。
+   * powerlaw_cap  倍率上限，默认 1000（尾部由幂律自然产生，不另做尖峰机制）。
    *
    * ⚠️ 下面 seedSettings() 只在【键不存在】时写入，所以已有库不会跟着
    *    改默认值 —— 部署必须跑 scripts/migrate-powerlaw.js --apply。
    */
-  powerlaw_rtp: '0.97',
-  powerlaw_cap: '120',
+  powerlaw_rtp: '0.87',
+  powerlaw_cap: '1000',
   min_rate: '1.10',        // 最低爆点 —— 决定最短逃跑窗口
   max_rate: '50',          // 最高爆点（上限保护）
   band_min: '1.10',        // 模式 4 区间下限

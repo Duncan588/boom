@@ -244,6 +244,92 @@ const adjPct = adjSame / (seq.length - 1);
 console.log(`   相邻两局完全相同 ${adjSame}/${seq.length - 1} = ${(adjPct * 100).toFixed(2)}%`);
 ok(adjPct < 0.10, '相邻重复率 < 10%（不是每两局就重样）', `${(adjPct * 100).toFixed(2)}%`);
 
+// ============================================================
+// §6 出厂默认值（2026-10-01 老板定：RTP=0.87 / cap=1000）
+// ============================================================
+//
+// ⚠️【为什么 §1–§5 不能用出厂值】§1–§5 用 RTP=0.97/CAP=120，因为它检验的是
+// 「公式本身对不对」，两个值都是任意选的。换成 0.87/1000 那些断言照样成立
+// （不变量与参数无关），但【采样噪声会变大】：cap=1000 时 m=100 的胜率只有
+// 0.87%，同样 N=1e6 下 σ 从 1.02% 涨到 1.09%，而尾部各档的相对误差更大。
+// 所以这里单独一节，用出厂值跑【产品口径】的断言，两者互不干扰。
+//
+// 【这一节钉的是「老板拍的那两个数字真的生效了」】
+// 光有 §1–§5 时，把 POWERLAW.RTP_DEFAULT 误改回 0.97 不会有任何测试变红 ——
+// 因为那些测试根本不读默认值。默认值就是【线上真实配置】，必须单独钉。
+console.log(`\n=== §6 出厂默认值实测：RTP=${POWERLAW.RTP_DEFAULT} / cap=${POWERLAW.CAP_DEFAULT} ===`);
+
+const M = 500_000;
+const dflt = new Float64Array(M);
+for (let i = 0; i < M; i++) dflt[i] = powerlawRate();     // 不传参 = 走出厂默认
+const dSorted = Array.prototype.slice.call(dflt).sort((a, b) => a - b);
+const dPct = (p) => dSorted[Math.min(M - 1, Math.floor(p * M))];
+const dShare = (f) => dflt.filter(f).length / M;
+
+console.log(`   p50=${dPct(0.5)}  p90=${dPct(0.9)}  p99=${dPct(0.99)}  最大=${dSorted[M - 1]}`);
+console.log(`   瞬爆(<1.10x)=${(dShare(v => v < 1.10) * 100).toFixed(2)}%  ` +
+  `≥50x=${(dShare(v => v >= 50) * 100).toFixed(2)}%  ≥125x=${(dShare(v => v >= 125) * 100).toFixed(2)}%`);
+
+// 不传参时拿到的就是出厂值（这是「默认生效」的定义，不是数值巧合）
+ok(dSorted[M - 1] > 120, '不传参时上限确实是 1000 量级（>120），出厂 cap 不是 120',
+  `最大 ${dSorted[M - 1]}`);
+ok(dPct(0.5) < 2.5, '出厂中位数 < 2.5x（日常不会天天见高倍）', String(dPct(0.5)));
+
+// 瞬爆率必须跟 1 − RTP 挂钩。RTP 0.87 ⇒ 约 13.9%；0.97 时才是 3.9%。
+// 这条能抓住「只改了 RTP_DEFAULT 常量、忘了改别处」或「瞬爆被写死成 3%」。
+//
+// ⚠️【口径别搞混 —— 我第一版就写错了】瞬爆是 X ≤ 1.00（飞行 0ms），
+// 它的概率是 1 − RTP/1.01（不是 1 − RTP，floor 到分 + max(1,·) 差这一点），
+// 实测 13.9%。而上面打印的 <1.10x = 20.90% 是另一个量：1.00–1.10 这一档
+// 加上瞬爆，窗口 0–1 秒。两个数字都对，但混用就会把断言写成永远红。
+const instExact = dShare(v => v <= 1.00);
+const instTh = 1 - POWERLAW.RTP_DEFAULT / 1.01;
+console.log(`   真·瞬爆(X≤1.00)=${(instExact * 100).toFixed(2)}%  理论 ${(instTh * 100).toFixed(2)}%`);
+// ⚠️【2026-10-01 收口：容差 0.02 → 0.005】原来写 0.02，在 N=50 万下相当于
+// 41σ —— 那不是容差，是「什么都抓不到」。而 1−RTP 与 1−RTP/1.01 在 0.87 时
+// 差 0.86pp = 17.6σ，0.02 能盖住它、0.005 抓得住。
+// σ = √(p(1−p)/N) = √(0.1386×0.8614/500000) = 4.9e-4 ⇒ 0.005 = 10σ。
+ok(Math.abs(instExact - instTh) < 0.005,
+  '出厂瞬爆率 ≈ 1 − RTP/1.01（0.87 → 13.86%，不是 1−RTP 的 13.00%）',
+  `实测 ${(instExact * 100).toFixed(2)}%`);
+
+/**
+ * ⚠️【尾部可达性 —— §15b 那个盲点必须在这里钉住】
+ *
+ * 「配置了 1000 但实测最高只到 20」这个缺陷，读审计（分支有没有读这个键）
+ * 完全查不出来 —— 分支读了、clamp 也对，只是【生成器】产出不到那么高。
+ * 所以唯一有效的判据是尾部实测：≥125x 的局数必须非零，且量级接近 RTP/125。
+ *
+ * 理论 P(X≥m) = RTP/m ⇒ m=125 时 0.696%。N=50 万 ⇒ 期望 3480 局，
+ * σ = √(3480) ≈ 59 ⇒ ±3σ 约 3.4%。用相对判据而不是绝对阈值。
+ */
+const tail125 = dShare(v => v >= 125);
+const th125 = POWERLAW.RTP_DEFAULT / 125;
+console.log(`   ≥125x 实测 ${(tail125 * 100).toFixed(3)}% / 理论 ${(th125 * 100).toFixed(3)}%`);
+ok(tail125 > 0 && Math.abs(tail125 / th125 - 1) < 0.20,
+  '尾部可达：≥125x 的局数与理论同量级（cap=1000 真的出得来高倍）',
+  `实测 ${(tail125 * 100).toFixed(3)}% vs 理论 ${(th125 * 100).toFixed(3)}%`);
+
+// 高倍档也要有，不能只有 125–200 这一段（八档直方图里 500–1000 曾是空档）
+const tail500 = dShare(v => v >= 500);
+ok(tail500 > 0, `最高档不是空的（≥500x 出现了 ${(tail500 * 100).toFixed(3)}%）`);
+
+// 八档空档检查：任何一档低于 0.5% 就是玩家能看见的「习惯区间」边界
+console.log('   --- 八档直方图 ---');
+const BANDS = [[1, 1.1], [1.1, 2], [2, 5], [5, 10], [10, 50], [50, 100], [100, 500], [500, 1000.01]];
+let holes = [];
+for (const [a, b] of BANDS) {
+  const p = dShare(v => v >= a && v < b);
+  console.log(`     ${String(a).padStart(4)}–${String(b).padEnd(7)} ${(p * 100).toFixed(3).padStart(7)}%` +
+    (p < 0.005 ? '  ❌ 空档' : ''));
+  if (p < 0.005) holes.push(`${a}–${b}`);
+}
+// 最高档天然只有 0.19%，它是 cap 的截断面而不是「生成不到」—— 排除它，
+// 剩下 7 档任何一档为空都说明分布被某个机制挖掉了。
+const holesReal = holes.filter(h => !h.startsWith('500'));
+ok(holesReal.length === 0, '前七档无空档（玩家看不见可辨识的区间边界）',
+  holesReal.length ? holesReal.join(', ') : '确认无');
+
 console.log('\n' + '='.repeat(52));
 console.log(`  通过 ${pass}  失败 ${fail}`);
 console.log('='.repeat(52));

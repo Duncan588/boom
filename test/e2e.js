@@ -97,15 +97,37 @@ function check(name, cond, extra) {
       if (d.type === 'tick' && escArmed && !escDone && betDone) {
         if (Number(d.rate) >= 1.5) {
           escArmed = false;
-          escDone = true;
+          /**
+           * ⚠️【2026-10-01 修】原本在这里就 `escDone = true` —— 在【发请求之前】。
+           * 后果：POST 还在飞的时候，本局若爆点低于 1.5x（tick 直接从 takeoff
+           * 跳到 over，中间没有一个 ≥1.5 的 tick），over 分支看到 escDone=true
+           * 就认为「本局已完成」，于是一个 status=0（没逃掉）的 bet 被当成成功样本
+           * 送进第 5 节断言，表现为随机的「✗ 状态=已逃跑 / esc=0」。
+           *
+           * RTP 0.87 让它【更少见】而不是更多见：P(爆点 < 1.5x) = RTP/1.5，
+           * 0.87 时 58%，旧的 0.97 是 65%。但真正的放大因素是 cap 从 120 提到
+           * 1000 之后分布更散、中位倍率更低，tick 序列更容易直接跳过 1.5x。
+           * 它是概率性出现，所以不能用「多跑几次看看」来判断修没修好。
+           *
+           * 修法：只在【服务端确认逃成功】时才置 escDone；失败就重新武装，
+           * 让下一局还有机会，而不是把失败当成功记账。
+           */
           call('/api/game/escape', { roundId: gid }).then((r) => {
             if (r.ok) {
+              escDone = true;
               check('逃跑成功', true);
               check('获得盈利', r.profit > 0, r);
               console.log(`  盈利 ${r.profit} QUN @ ${r.rate}x → 余额 ${r.balance}`);
             } else {
+              escDone = false;
+              escArmed = true;
+              console.log('  (逃跑被拒，可能是已爆点，重置等下一局)', r.error || '');
               check('逃跑成功', false, r);
             }
+          }).catch((e) => {
+            escDone = false;
+            escArmed = true;
+            console.log('  逃跑请求异常', e.message);
           });
         }
       }
@@ -135,7 +157,21 @@ function check(name, cond, extra) {
   check('战绩已记录', !!(myBet && myBet.round_id === gid), myBet);
   if (myBet) {
     check('状态=已逃跑', myBet.status === 1, myBet);
-    check('赔率=爆点倍率', Math.abs(myBet.escape_rate - boom) < 0.01, { esc: myBet.escape_rate, boom });
+    /**
+     * ⚠️【2026-10-01 修：这条断言原本写反了】
+     * 原本是 `escape_rate === boom`，但这个测试在【第一个 rate ≥ 1.5 的 tick】
+     * 就逃跑（第 97 行），所以 escape_rate 天然是 1.5 附近的值，
+     * 而 boom 是之后的最终倍率。两者【必然】不相等，除非爆点刚好就在 1.5x。
+     *
+     * 也就是说：原断言只在「爆点恰好 = 逃跑点」时通过 —— 概率约 1/几百，
+     * 平时必红。实测 esc=1.5 / boom=3.93 就是正确的正常结算。
+     *
+     * 真正的不变量是：成功逃跑 ⇒ escape_rate ≤ boom，且 escape_rate ≥ 1。
+     * 这条才同时表达了「钱按玩家逃到的倍率赔」和「没在爆点之后才逃」。
+     */
+    check('赔率=逃跑时倍率（且 ≤ 爆点）',
+      myBet.escape_rate >= 1 && myBet.escape_rate <= boom + 1e-9,
+      { esc: myBet.escape_rate, boom });
   }
   console.log(`  余额 ${coins0} → ${after.user.coins}`);
 

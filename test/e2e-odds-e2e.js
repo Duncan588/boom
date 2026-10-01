@@ -3,7 +3,30 @@
  * 不依赖机器人 —— 用户已要求全部停用，测试自己造两个用户轮流下注。
  */
 const WebSocket = require('ws');
-const BASE = 'http://127.0.0.1:8080';
+const path = require('path');
+const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+
+const arg = (k, d) => {
+  const hit = process.argv.find((a) => a.startsWith('--' + k + '='));
+  return hit ? hit.slice(k.length + 3) : d;
+};
+const BASE = arg('base', 'http://127.0.0.1:8080');
+const WSU = arg('ws', 'ws://127.0.0.1:9501/ws');
+
+/**
+ * ⚠️ 超时必须由 flightMs(cap) 推导，不能写死 70000。
+ *
+ * 硬编码的 70000 是在旧上限（50x → 50.6s）下留的余量。换成 cap=1000 后
+ * flightMs(1000) = 100s，而 `over` 是飞行结束后才广播的 —— 于是任何
+ * 倍率 ≥ 80x 的局（flightMs(80) = 65s）都会在超时那一刻被判失败。
+ * 那不是偶发，是【必然假红】：倍率越高越容易挂，测试会系统性地
+ * 只在低倍局上通过，看起来一切正常。
+ *
+ * 真实上限 = 最坏倍率对应的飞行时长 + 下注/封盘窗口 + 结算收尾余量。
+ */
+const CFG_ = GL.CFG;
+const FLIGHT_BUDGET = Math.ceil(GL.flightMs(Number(arg('cap', '1000'))) / 1000) + 15;
+const ROUND_BUDGET = FLIGHT_BUDGET + CFG_.BET_MS / 1000 + CFG_.LOCK_MS / 1000 + 20;
 
 let cookieA = '', cookieB = '';
 
@@ -35,7 +58,7 @@ async function login(tag, did) {
 
 function wsConnect(cookie) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket('ws://127.0.0.1:9501/ws', { headers: { Cookie: cookie } });
+    const ws = new WebSocket(WSU, { headers: { Cookie: cookie } });
     ws.once('open', () => resolve(ws));
     ws.once('error', () => reject(new Error('WS 连接失败')));
     setTimeout(() => reject(new Error('WS 超时')), 8000);
@@ -72,12 +95,14 @@ function waitFor(ws, type, ms = 30000) {
   let lastGid = null;
 
   const R = 10;
-  console.log('\n=== 跑 ' + R + ' 局完整循环（下注 → 封盘 → 起飞 → 爆点/逃跑）===');
+    console.log('\n=== 跑 ' + R + ' 局完整循环（下注 → 封盘 → 起飞 → 爆点/逃跑）===');
+    console.log('   预算：单局 ' + Math.round(ROUND_BUDGET) + 's（flightMs(cap=' + arg('cap', '1000') + ')=' +
+      (GL.flightMs(Number(arg('cap', '1000'))) / 1000).toFixed(0) + 's + 下注/封盘 + 收尾余量）');
 
-  for (let i = 1; i <= R; i++) {
-    const beginP = waitFor(wsA, 'begin', 40000);
-    const overP = waitFor(wsA, 'over', 70000);
-    const begin = await beginP;
+    for (let i = 1; i <= R; i++) {
+      const beginP = waitFor(wsA, 'begin', Math.round(ROUND_BUDGET * 1000));
+      const overP = waitFor(wsA, 'over', Math.round(FLIGHT_BUDGET * 1000));
+      const begin = await beginP;
 
     if (begin.gid !== lastGid) { lastGid = begin.gid; }
 
@@ -112,7 +137,7 @@ function waitFor(ws, type, ms = 30000) {
       wsA.on('message', h);
     });
 
-    const takeoff = await waitFor(wsA, 'takeoff', 60000).catch(() => null);
+    const takeoff = await waitFor(wsA, 'takeoff', Math.round(FLIGHT_BUDGET * 1000)).catch(() => null);
     const over = await overP;
     const esc = await escapeP;
     rates.push(over.boom);
