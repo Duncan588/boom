@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>爆点逃跑</title>
-<link rel="stylesheet" href="/css/base.css?v=39">
-<link rel="stylesheet" href="/css/game.css?v=39">
+<link rel="stylesheet" href="/css/base.css?v=40">
+<link rel="stylesheet" href="/css/game.css?v=40">
 <link rel="icon" href="/assets/qun.png">
 </head>
 <body>
@@ -82,6 +82,13 @@
       <div class="event-banner" id="eventBanner" hidden>
         <span class="dot"></span><b id="eventName">限时活动</b>
         <span class="rng" id="eventRange"></span>
+        <!--
+          【2026-10-02 mode 11】不保证公平提示。
+          这个引擎的固定逃 10x 净期望是 +598%，理性玩家一定会发现。
+          横幅是唯一每局都在玩家眼前的位置，只写在文档里等于隐瞒。
+          由 showEvent() 按服务端下发的 d.unfair 决定是否显示。
+        -->
+        <span class="unfair" id="eventUnfair" hidden>本时段不保证公平</span>
       </div>
 
       <div class="phase" id="phase">连接中…</div>
@@ -161,7 +168,7 @@
   </div>
 </div>
 
-<script src="/js/chart.js?v=39"></script>
-<script src="/js/app.js?v=39"></script>
+<script src="/js/chart.js?v=40"></script>
+<script src="/js/app.js?v=40"></script>
 </body>
 </html>

@@ -457,6 +457,11 @@ const DEFAULT_SETTINGS = {
   pool_balance: '0',       // 后台资金池（决定 1/2/3 模式爆点）
   rake_percent: '0.03',    // 平台抽成
   events_json: '[]',       // 限时高倍率活动（赔率侧）
+  // 【2026-10-02 新增】活动档位形状（mode 11 专用）。
+  // ⚠️ 与 events_json 正交：events_json 管【几点开】，本键管【开的时候出多少】。
+  // 留空则用 event-bands.js 里的默认 10/70/20。
+  // ⚠️ 空字符串【不是】配 0 —— 空 = 用默认值；把三档 w 全填 0 才是配 0。
+  event_bands_json: '',
   activities: '',           // 小活动插件启停（server/activities/）
   activities_json: '{}',    // 小活动参数覆盖
   // 机器人

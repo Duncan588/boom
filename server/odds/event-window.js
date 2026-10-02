@@ -103,6 +103,19 @@ function activeEvent(cfg, now = new Date()) {
        *    min/max/boom_rate，所以「配了活动但没生效」要按当前模式排查。
        */
       rtp_bonus: ev.rtp_bonus,
+      /**
+       * 【2026-10-02】mode 11（活动档位）下把「不保证公平」传到前台横幅。
+       *
+       * ⚠️ 为什么必须外发：mode 11 的固定逃 10x 净期望是 +598%，
+       *    理性玩家一定会发现。不告知就是隐瞒，而横幅是唯一每局都在
+       *    玩家眼前的位置 —— 只写在后台文档里等于没说。
+       *
+       * ⚠️ 只在 mode 11 时为 true：其它模式的横幅不该出现这句话。
+       */
+      unfair: String(cfg.odds_mode) === '11',
+      /** 活动的结束时刻（分钟数），供横幅显示「剩余时间」 */
+      to_min: end,
+      from_min: from,
     };
   }
   return null;

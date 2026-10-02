@@ -17,6 +17,7 @@
 
 const { shapedDecide } = require('./shaped-rate');
 const { powerlawDecide } = require('./powerlaw');
+const { eventDecide } = require('./event-bands');
 
 /**
  * 决定本局爆点。**这是本项目唯一参与定价的函数。**
@@ -72,6 +73,34 @@ function decideRate(cfg, pot, pool, event, ctx) {
    */
   if (String(cfg.odds_mode) === '10') {
     return shapedDecide(cfg, p <= 0);
+  }
+
+    /**
+     * 【mode 11：活动档位引擎（10/70/20）】
+     *
+     * ⚠️⚠️ 这是【唯一一条活动期故意放弃零套利】的分支，运营 2026-10-02 拍板。
+     *   固定逃 10x 每注净期望 +598% —— 见 event-bands.js 顶部的完整数学说明。
+     *   三条配套硬性要求：
+     *     ① 只在【命中限时活动】时生效（ev 非空），活动结束自动回幂律；
+     *     ② 活动必须有结束时间，不允许全天常开；
+     *     ③ 事件 banner 必须对玩家明示「本时段不保证公平」。
+     *
+     * ⚠️ 为什么放在 mode 10【之后】而不是最前面：mode 10 是空房独立区间的
+     *   全局开关，优先级更高。两者同时开启时以 mode 10 为准 —— 这一点
+     *   写在这里而不是靠 if 顺序隐式决定，因为隐式顺序改一次就静默变行为。
+     *
+     * ⚠️ 也因此【不读 pot】：空房（pot=0）同样走三档分布，不另开区间。
+     */
+  if (String(cfg.odds_mode) === '11') {
+    // ⚠️ 护栏一：没命中限时活动就【不能】用这个引擎。
+    //    否则运营忘了配 events_json，mode 11 会变成全天常开的
+    //    「固定逃 10x 每注净赚 +598%」—— 那不是限时活动，是长期漏洞。
+    if (ev && ev.to_min != null) return eventDecide(cfg, ev);
+    // ⚠️ 护栏二：活动必须【有结束时间】。to_min 缺失 = 没有可判定的窗口
+    //    = 等同全天，所以拒绝而不是猜。这是 event-bands.js 顶部列的
+    //    三条硬性要求之一，缺了它整个「套利窗口有界」的前提就不成立。
+    //    没命中或没有结束时间时一律回幂律 —— 玩家看到的仍是公平玩法。
+    return powerlawDecide(cfg, ev);
   }
 
   // pot / pool / ctx 是历史签名，engine.js 按位置传 5 个参数。

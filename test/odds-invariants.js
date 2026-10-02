@@ -327,11 +327,25 @@ console.log('\n§8 随机源');
     '抽样文件里没有 Math.random（注释里 ' + (sampleSrc.match(/Math\.random/g) || []).length + ' 处）', '');
   ok(/crypto\.randomBytes/.test(sampleCode), '使用 crypto.randomBytes（CSPRNG）', '');
   ok(!/require\('\.\/(jev|v3)/.test(sampleCode), '抽样文件不再 require jev / v3 引擎', '');
-  // ⚠️ decideRate 现在只有 mode 10 一条 `if (String(...) === '10')` 分支，
-  //    其余全走幂律 —— 所以「无 mode 分支」必须改成「分支数被钉住」。
-  const modeBranches = (decideCode.match(/String\(\s*cfg\.odds_mode\s*\)\s*===/g) || []).length;
-  ok(modeBranches === 1,
-    'decideRate 只有一个 odds_mode 分支（mode 10），其余走幂律', '实际 ' + modeBranches + ' 个');
+  // ⚠️ 「无 mode 分支」必须改成「分支被逐一钉住」—— 但分支数本身不是目的，
+  //    【目的】是「新增分支时必须有人在这里确认过」。
+  //    2026-10-02 加 mode 11（活动档位）时这条闸门立刻变红，
+  //    逼着把新分支登记进来 —— 这正是它该有的行为。
+  //    当前已登记：10 = 零套利高倍率，11 = 活动档位（限时活动用）。
+  const modeBranches = (decideCode.match(/String\(\s*cfg\.odds_mode\s*\)\s*===\s*'(\d+)'/g) || [])
+    .map((m) => m.match(/'(\d+)'/)[1]);
+  const EXPECTED_MODES = ['10', '11'];
+  ok(JSON.stringify(modeBranches.slice().sort()) === JSON.stringify(EXPECTED_MODES),
+    'decideRate 的 odds_mode 分支 = [' + EXPECTED_MODES.join(',') + ']，其余走幂律',
+    '实际 [' + modeBranches.join(',') + ']');
+  // 幂律仍是默认兜底：没有任何分支命中时必须回到它。
+  // ⚠️ 用 indexOf 而不是跨行正则 —— 文件行尾可能是 CRLF，
+  //    而 \s* 能吃掉 \r，所以正则能过但换成 indexOf 就找不到内容顺序；
+  //    反过来若把裸换行写进正则字面量会直接语法错。两条都踩过。
+  const tail = decideCode.slice(decideCode.indexOf('void p;'));
+  ok(tail.indexOf('powerlawDecide') > 0 && tail.indexOf('powerlawDecide') < 120,
+    '幂律仍是最后的兜底返回（分支都不命中时走幂律）',
+    tail.slice(0, 80).replace(/\s+/g, ' '));
   ok(typeof G.tableRate === 'undefined' && typeof G.weightedRate === 'undefined', 'tableRate / weightedRate 已删除', '');
   const orig = Math.random; let hit = 0;
   Math.random = () => { hit++; return orig(); };

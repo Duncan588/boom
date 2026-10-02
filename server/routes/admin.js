@@ -326,6 +326,29 @@ function register(router) {
   });
 
   /**
+   * 活动档位（mode 11）预览 —— 三档占比 + 【最赚的固定逃跑点】。
+   *
+   * ⚠️ 为什么必须报 bestEscape：这个引擎【故意】不保证公平（运营 2026-10-02
+   *    拍板），固定逃 10x 每注净 +598%。只报「20% 在 30-120x」是卖点，
+   *    报不出最优点就是在隐瞒风险 —— 而这正是后台预览存在的意义。
+   *
+   * ⚠️ 抽的是 eventRate() 本尊，不是副本：否则会出现「预览说 10/70/20、
+   *    实际不是」的经典形状（cf. slot-preview 当年栽在 simulate 上）。
+   */
+  router.get('/admin/api/event-bands-preview', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const rounds = Math.min(200000, Math.max(1000, Number(req.query.get('rounds')) || 40000));
+    const eb = require('../odds/event-bands');
+    try {
+      const cfg = { ...db.allSettings() };
+      if (req.query.get('bands')) cfg.event_bands_json = String(req.query.get('bands'));
+      json(res, 200, { ok: true, ...eb.eventReport(cfg, rounds) });
+    } catch (e) {
+      json(res, 500, { error: '预览失败：' + e.message });
+    }
+  });
+
+  /**
    * 幂律（mode 9）预览。
    *
    * ⚠️ 为什么不能复用 /admin/api/odds-preview：那个接口跑 game-logic.simulate()，

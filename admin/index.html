@@ -332,6 +332,14 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
             <option value="1">旧版 1 · 赢</option>
             <option value="2">旧版 2 · 输</option>
             <option value="3">旧版 3 · 平衡</option>
+            <!--
+              【2026-10-02 新增 mode 11】活动档位引擎。
+              ⚠️ 这是【唯一不保证公平】的模式，选它等于承认「活动期间
+              固定一个倍率逃跑就能长期获利」（实测逃 10x 每注净 +598%）。
+              所以：① 它只在命中限时活动时生效，活动结束自动回幂律；
+              ② 活动必须有结束时间；③ 前台事件横幅会明示本时段不保证公平。
+            -->
+            <option value="11">活动档位 10/70/20（限时活动用 · 不保证公平）</option>
           </select>
         </div>
         <div class="f"><label>最低爆点 min_rate（安全下限）</label><input class="inp" id="s_min" type="number" step="0.01"></div>

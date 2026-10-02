@@ -653,7 +653,7 @@
         break;
 
       case 'event':
-        showEvent(d.name, d.min, d.max);
+        showEvent(d.name, d.min, d.max, d.unfair);
         break;
 
       case 'event_end':
@@ -663,11 +663,14 @@
   }
 
   /* ---------------- 限时活动横幅 ---------------- */
-  function showEvent(name, min, max) {
+  function showEvent(name, min, max, unfair) {
     var el = $('#eventBanner');
     if (!el) return;
     $('#eventName').textContent = name || '限时活动';
     $('#eventRange').textContent = (min || 1) + 'x - ' + (max || 10) + 'x 高倍场';
+    // mode 11：服务端明确告知这个时段不保证公平，必须让玩家看见。
+    var u = $('#eventUnfair');
+    if (u) u.hidden = !unfair;
     el.hidden = false;
   }
   function hideEvent() {
