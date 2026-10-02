@@ -6,7 +6,7 @@
  *   node scripts/sim-v3.js --rounds=2000 --jump=0.3 --width=1.8
  */
 const path = require('path');
-const { createEngine } = require(path.join(__dirname, '..', 'server', 'v3', 'engine'));
+const { createEngine } = require(path.join(__dirname, '..', 'server', 'odds', 'v3', 'engine'));
 
 const argv = {};
 for (const a of process.argv.slice(2)) {

@@ -2,7 +2,7 @@
 /**
  * sim-odds.js —— 爆点分布体检器（离线，零成本，不碰服务器）
  *
- * 直接 import 现网引擎 server/game-logic.js 的 decideRate()，
+ * 直接 import 现网引擎 server/odds/index.js 的 decideRate()，
  * 所以测的是真实代码而不是副本。
  *
  * 用法：
@@ -19,7 +19,7 @@
  */
 const crypto = require('crypto');
 const path = require('path');
-const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const GL = require(path.join(__dirname, '..', 'server', 'odds'));
 
 const arg = (k, d) => {
   const hit = process.argv.find(a => a.startsWith('--' + k + '='));

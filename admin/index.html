@@ -390,7 +390,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
       </div>
 
       <!--
-        模式 10：高倍率 · 零套利（server/shaped-rate.js）
+        模式 10：高倍率 · 零套利（server/odds/shaped-rate.js）
 
         【与 mode 9 的区别 —— 一句话】
         mode 9 的性质是「所有逃跑点的净期望完全相同」；
@@ -413,7 +413,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         空房局不影响真人局的抽样（test/shaped-rate.js §5 有隔离断言）。
 
         【无参数可调】
-        分布参数是静态常数（写在 server/shaped-rate.js 的 SHAPED 里），
+        分布参数是静态常数（写在 server/odds/shaped-rate.js 的 SHAPED 里），
         后台不需要填任何东西 —— 这是刻意的：这些参数调任何一个都会破坏
         「毛赔付处处 < 1.0309」的构造保证。
       -->
@@ -436,7 +436,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         <div class="hint" style="padding:8px;border-left:3px solid var(--warn);color:var(--warn)">
           <b>本模式没有可调参数</b>，分布系数是代码里的静态常数。
           这是刻意的：任何一个参数改动都可能破坏「毛赔付处处低于保本线」这条构造保证。
-          需要调整分布形状必须改 <code>server/shaped-rate.js</code> 的 <code>SHAPED</code>，
+          需要调整分布形状必须改 <code>server/odds/shaped-rate.js</code> 的 <code>SHAPED</code>，
           并重跑 <code>node test/shaped-rate.js</code> 验收。
         </div>
       </div>
@@ -475,7 +475,7 @@ td img { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; 
         </div>
       </div>
       <!--
-        模式 8：老虎机（server/v3/engine.js）
+        模式 8：老虎机（server/odds/v3/engine.js）
 
         【它做什么】纯本地随机游走，零 API 成本（mode 7 每局约 $0.17）。
         每一局的倍率由三层叠加产生：瞬爆独立掷骰 + 中心按档位游走 + 邻域对数均匀采样。
@@ -1114,8 +1114,11 @@ function syncW5Inner(){
   var total = wb + wl + wm + wh + wt;
   if (total <= 0) { $('#w5Preview').innerHTML = '<span style="color:var(--err)">权重全为 0，无法生成爆点</span>'; return; }
 
-  // 与 server/game-logic.js weightedRate() 完全一致的五段取法
-  var N = 40000;
+  // ⚠️ 历史注释：这里写的是「与 server/odds/flight-curve.js weightedRate() 一致」，
+    //    但 weightedRate 早已随五段加权模式一起删除（幂律取代了它），
+    //    所以指向的那个文件里并没有这个函数。这段 w5Preview 预览本身
+    //    早已不再代表任何在用的引擎 —— 别拿它当现网行为。
+    var N = 40000;
   var b = {'瞬爆':0,'1.02-4x':0,'4-10x':0,'10-30x':0,'30x+':0};
   var sum = 0, sorted = [];
   for (var i = 0; i < N; i++) {
@@ -1264,7 +1267,7 @@ function w6RenderRows(){
 }
 
 /**
- * 分布表校验（与 server/odds-validate.js 同一套规则）
+ * 分布表校验（与 server/odds/odds-validate.js 同一套规则）
  * @returns {{ok:boolean, error?:string}}
  */
 function w6Validate(rows){
@@ -1674,7 +1677,7 @@ $('#btnSaveOdds').onclick=function(){
   var rows = (mode === '6') ? w6Read() : [];
   if (mode === '6') {
     /**
-     * 与 server/odds-validate.js 保持同一套规则。
+     * 与 server/odds/odds-validate.js 保持同一套规则。
      * 这里先拦一次只是为了少一次请求往返；服务端还会再拦一次
      * （防止绕过、防止浏览器缓存的旧页面）。
      * 改规则时两边都要改 —— test/odds-validate.js 会验证服务端那份。

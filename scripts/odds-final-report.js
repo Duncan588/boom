@@ -2,7 +2,7 @@
 /**
  * odds-final-report.js —— mode 9 幂律终版验收（离线、零成本、不碰服务器）
  *
- * import 现网 server/game-logic.js 的 powerlawRate / flightMs / rateAt / payout，
+ * import 现网 server/odds/index.js 的 powerlawRate / flightMs / rateAt / payout，
  * 所以测的是真实代码而不是副本。
  *
  * 用法：
@@ -16,7 +16,7 @@
  */
 const crypto = require('crypto');
 const path = require('path');
-const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const GL = require(path.join(__dirname, '..', 'server', 'odds'));
 
 const arg = (k, d) => {
   const hit = process.argv.find(a => a.startsWith('--' + k + '='));

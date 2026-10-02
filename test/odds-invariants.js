@@ -19,7 +19,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const G = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const G = require(path.join(__dirname, '..', 'server', 'odds'));
 
 /**
  * ⚠️ 这个默认参数必须与 POWERLAW.RTP_DEFAULT 一致（客户 2026-10-02 拍板 = 0.90）。
@@ -304,12 +304,34 @@ console.log('\n§7 无状态');
 /* ---------- §8 随机源 ---------- */
 console.log('\n§8 随机源');
 {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'game-logic.js'), 'utf8');
-  const code = src.split('\n').filter(l => !/^\s*(\*|\/\*|\/\/)/.test(l)).join('\n');
-  ok(!/Math\.random/.test(code), '代码里没有 Math.random（注释里 ' + (src.match(/Math\.random/g) || []).length + ' 处）', '');
-  ok(/crypto\.randomBytes/.test(code), '使用 crypto.randomBytes（CSPRNG）', '');
-  ok(!/require\('\.\/(jev|v3)/.test(code), '不再 require jev / v3 引擎', '');
-  ok(!/mode === /.test(code), 'decideRate 内无任何 mode 分支', '');
+  /**
+   * ⚠️ 目录化之后（2026-10-02）：原来这里读【一个】server/game-logic.js，
+   *    而它已经被拆成 server/odds/ 下五个文件。断言必须覆盖【每一个】
+   *    会参与抽样的文件 —— 只读一个就等于把另外四个变成无人检查的盲区，
+   *    而 §8 的全部意义就是「抽样代码里不能出现 Math.random」。
+   *
+   *    分工：随机源 → powerlaw.js / shaped-rate.js；mode 分支 → decide.js。
+   *    flight-curve.js 与 event-window.js 不参与抽样，但一并纳入以防将来。
+   */
+  const ODDS_DIR = path.join(__dirname, '..', 'server', 'odds');
+  const read = (f) => fs.readFileSync(path.join(ODDS_DIR, f), 'utf8');
+  const strip = (s) => s.split('\n').filter(l => !/^\s*(\*|\/\*|\/\/)/.test(l)).join('\n');
+
+  const sampleFiles = ['powerlaw.js', 'shaped-rate.js', 'flight-curve.js', 'event-window.js'];
+  const sampleSrc = sampleFiles.map(read).join('\n');
+  const sampleCode = strip(sampleSrc);
+  const decideSrc = read('decide.js');
+  const decideCode = strip(decideSrc);
+
+  ok(!/Math\.random/.test(sampleCode),
+    '抽样文件里没有 Math.random（注释里 ' + (sampleSrc.match(/Math\.random/g) || []).length + ' 处）', '');
+  ok(/crypto\.randomBytes/.test(sampleCode), '使用 crypto.randomBytes（CSPRNG）', '');
+  ok(!/require\('\.\/(jev|v3)/.test(sampleCode), '抽样文件不再 require jev / v3 引擎', '');
+  // ⚠️ decideRate 现在只有 mode 10 一条 `if (String(...) === '10')` 分支，
+  //    其余全走幂律 —— 所以「无 mode 分支」必须改成「分支数被钉住」。
+  const modeBranches = (decideCode.match(/String\(\s*cfg\.odds_mode\s*\)\s*===/g) || []).length;
+  ok(modeBranches === 1,
+    'decideRate 只有一个 odds_mode 分支（mode 10），其余走幂律', '实际 ' + modeBranches + ' 个');
   ok(typeof G.tableRate === 'undefined' && typeof G.weightedRate === 'undefined', 'tableRate / weightedRate 已删除', '');
   const orig = Math.random; let hit = 0;
   Math.random = () => { hit++; return orig(); };

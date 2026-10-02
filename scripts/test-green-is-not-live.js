@@ -23,7 +23,7 @@
  */
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
-const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const GL = require(path.join(__dirname, '..', 'server', 'odds'));
 
 const line = t => console.log('\n' + '='.repeat(78) + '\n' + t + '\n' + '='.repeat(78));
 
@@ -76,14 +76,29 @@ for (const [k, code, dbv] of rows) {
   if (!same) mismatch++;
   console.log('  ' + k.padEnd(20) + code.padEnd(14) + (dbv === undefined ? '(未设置)' : dbv).padEnd(14) + (same ? '是' : '否 ← 不一致'));
 }
+/**
+ * 合法赔率模式。
+ *   9  幂律 · 恒定期望（所有逃跑点净期望相同）
+ *   10 高倍率 · 零套利（server/odds/shaped-rate.js，放弃等期望换更高中位数）
+ *
+ * ⚠️ 这份白名单原先只写 '9'，于是切到 mode 10 之后本脚本一直报 FAIL ——
+ *    那是判据过期，不是配置错。部署验证每轮都跑它，判据错了会一直误报。
+ *    1–8 的实现已在 6e0a34d 删除，写进去会静默落到 base 分支，所以不接受。
+ */
+const OK_MODES = { '9': '幂律 · 恒定期望', '10': '高倍率 · 零套利' };
+const modeOk = !!OK_MODES[String(cur.odds_mode)];
+
 console.log('\n  当前赔率模式 odds_mode = ' + (cur.odds_mode || '(未设置)') +
-  (cur.odds_mode === '9' ? '  ✅ 幂律' : '  ← 还没切到幂律 9'));
-ok(cur.odds_mode === '9', '线上赔率模式已是幂律 9', '当前 ' + cur.odds_mode);
+  (modeOk ? '  ✅ ' + OK_MODES[String(cur.odds_mode)] : '  ← 不是幂律系的 9/10'));
+ok(modeOk, '线上赔率模式是幂律系（9=幂律 或 10=高倍率零套利）', '当前 ' + cur.odds_mode);
 
 line('§3 结论');
-if (mismatch === 0 && cur.odds_mode === '9') {
-  console.log('  ✅ 代码常量与 settings 表一致，且模式已切到幂律。');
+if (mismatch === 0 && modeOk) {
+  console.log('  ✅ 代码常量与 settings 表一致，且模式已切到幂律系。');
   console.log('     此时「测试全绿」与「线上生效」是一致的。');
+  console.log('     注：mode 10 不读 powerlaw_rtp / powerlaw_cap（它的分布参数是');
+  console.log('         server/odds/shaped-rate.js 里的静态常数），所以切到 10 时上面');
+  console.log('         两行若显示「不一致」也不影响它运行 —— 但保持一致更利于回滚。');
 } else {
   console.log('  ⚠️【测试全绿 ≠ 线上生效】当前存在 ' + mismatch + ' 处不一致：');
   if (cur.powerlaw_rtp !== String(GL.POWERLAW.RTP_DEFAULT)) {
@@ -94,14 +109,14 @@ if (mismatch === 0 && cur.odds_mode === '9') {
     console.log('     · 线上 powerlaw_cap = ' + cur.powerlaw_cap +
       '，代码常量 = ' + GL.POWERLAW.CAP_DEFAULT);
   }
-  if (cur.odds_mode !== '9') {
-    console.log('     · 线上 odds_mode = ' + cur.odds_mode + '，幂律需要 9');
+  if (!modeOk) {
+    console.log('     · 线上 odds_mode = ' + cur.odds_mode + '，幂律系需要 9（powerlaw）或 10（shaped）');
   }
   console.log('\n  原因：server/db.js 的 seedSettings() 只在【键不存在】时写入，');
   console.log('        而线上库这几个键都存在 ⇒ DEFAULT_SETTINGS 的新默认值不会补写进去。');
   console.log('\n  修法（写生产 settings 表，属于部署动作，我一条不碰）：');
-  console.log('     node scripts/migrate-powerlaw.js                 # 只读，先看清当前值');
-  console.log('     node scripts/migrate-powerlaw.js --apply --force # 写入并切到幂律');
+  console.log('     node scripts/migrate-powerlaw.js --force --mode=10   # 只读，先看清当前值');
+  console.log('     node scripts/migrate-powerlaw.js --apply --force --mode=10   # 写入并切模式');
   console.log('     【然后必须重启服务】—— 顺序反了配置不生效且不报错');
   console.log('\n  ⇒ 这就是为什么 §6 出厂默认值断言全绿也救不了线上：');
   console.log('     它读的是代码常量，而决定玩家体验的是 settings 表。');

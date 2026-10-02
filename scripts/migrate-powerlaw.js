@@ -88,7 +88,7 @@ const PLAN = {
   daily_rtp_bonus: String(bonusN),
 };
 // 只有 --force 才动 odds_mode —— 它决定整局节奏，不该被迁移脚本悄悄改掉。
-// ⚠️ --mode=10 切的是「高倍率 · 零套利」引擎（server/shaped-rate.js）。
+// ⚠️ --mode=10 切的是「高倍率 · 零套利」引擎（server/odds/shaped-rate.js）。
 //    它与 mode 9 的差别是：mode 9 保证「所有逃跑点净期望完全相同」，
 //    mode 10 放弃那条性质换取更高中位数（1.80x → 2.03x），但仍是零套利
 //    （毛赔付处处 < 1.0309）。mode 10 的分布参数是代码里的静态常数，

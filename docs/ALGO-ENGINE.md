@@ -560,7 +560,7 @@ node scripts/test-green-is-not-live.js    # 迁移前红，迁移后三行「一
 
 ### 3.1 上线前验收判据清单
 
-全部跑在**生产引擎自己的输出**上（`require('../server/game-logic.js')` 的
+全部跑在**生产引擎自己的输出**上（`require('../server/odds')` 的
 `powerlawRate`），不是自己的复刻。
 
 ```bash
@@ -647,10 +647,16 @@ grep -rn '<函数名>(' --include='*.js' .
 
 ### 3.5 目录结构与新赔率模式的上线顺序
 
-引擎导出（`server/game-logic.js` 末尾）：`CFG` / `FLIGHT_SCALE` / `flightMs` /
+引擎导出（`server/odds/index.js` 汇总）：`CFG` / `FLIGHT_SCALE` / `flightMs` /
 `rateAt` / `decideRate` / `activeEvent` / `payout` / `round2` / `sleep` /
 `powerlawRate` / `powerlawDecide` / `powerlawReport` / `normRtp` / `normCap` /
 `normEventBonus` / `POWERLAW`。
+
+⚠️ **外部代码一律 `require('../server/odds')`**（不要直接 require 子模块）——
+2026-10-02 把原来那个 665 行的 `server/game-logic.js` 拆成了
+`server/odds/` 下的 `flight-curve.js` / `powerlaw.js` / `event-window.js` /
+`decide.js` 四个文件。拆分是**按行号区间原样切出**的，行为经 50 万局
+新旧逐值对比证明完全等价（见下节「目录化等价证明」）。
 
 **任何行为变化都必须是「参数」而不是「代码」** —— 行为输入要么是 `cfg`
 （`refreshSettings()` 每局重读，不缓存），要么是常数。否则运营改一个配置
@@ -701,7 +707,7 @@ curl -s "https://host/js/app.js?v=<新>" | grep -c '<新符号>'   # 0 = 还是�
 ## 4. 可复现的验证命令
 
 全部脚本在 `scripts/` 下，**都是纯本地、零 API 成本、不连数据库、不开端口**
-（唯一例外见标注）。它们 `require('../server/game-logic.js')` 直接测生产代码，
+（唯一例外见标注）。它们 `require('../server/odds')` 直接测生产代码，
 不是测副本。
 
 ```bash
@@ -792,7 +798,17 @@ node test/odds-validate.js   # 赔率表校验
 
 | 文件 | 内容 |
 |---|---|
-| `server/game-logic.js` | 幂律引擎、飞行曲线、`decideRate` |
+| `server/odds/` | **倍率算法全部在此**（2026-10-02 目录化） |
+| `server/odds/index.js` | 唯一入口：外部只 `require('./odds')` |
+| `server/odds/flight-curve.js` | 飞行曲线 `flightMs`/`rateAt`、`CFG` 全局常量、`payout`、`round2` |
+| `server/odds/powerlaw.js` | 幂律引擎 `powerlawRate`/`powerlawDecide`/`powerlawReport`、`POWERLAW` |
+| `server/odds/shaped-rate.js` | 模式 10 零套利高倍率 + 空房独立区间 |
+| `server/odds/event-window.js` | 限时活动时段判定（显式北京时间） |
+| `server/odds/decide.js` | `decideRate()` —— 唯一参与定价的入口 |
+| `server/odds/odds-validate.js` | 后台赔率表校验（唯一实现） |
+| `server/odds/v2/engine.js` · `v3/engine.js` | 历史引擎（现网已不接线） |
+| `server/odds/jev*.js` | 历史引擎：AI 做庄（需外部 API，现网已不接线） |
+| `server/odds/archive/` | 旧 Jev 文件的备份（与 `jev*.js` 逐字节相同，历史保留） |
 | `server/engine.js` | 回合循环、逃跑守卫 `cur >= boom`、结算 |
 | `server/db.js` | `DEFAULT_SETTINGS` / `seedSettings()` 的「只在键不存在时写入」语义 |
 | `scripts/migrate-powerlaw.js` | 参数迁移（默认 dry-run、幂等） |

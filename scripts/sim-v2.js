@@ -8,7 +8,7 @@
  *   node scripts/sim-v2.js --empty=30          每 30 局有 1 局空房
  */
 const path = require('path');
-const E = require(path.join(__dirname, '..', 'server', 'v2', 'engine'));
+const E = require(path.join(__dirname, '..', 'server', 'odds', 'v2', 'engine'));
 
 const argv = {};
 for (const a of process.argv.slice(2)) {

@@ -28,7 +28,7 @@
  *   rtpBonus 留空 = 默认 0.03；配 0 = 活动期不加成（形状仍不变）
  */
 
-const { POWERLAW } = require('../game-logic');
+const { POWERLAW } = require('../odds');
 
 function inRange(now, from, to) {
   const m = now.getHours() * 60 + now.getMinutes();

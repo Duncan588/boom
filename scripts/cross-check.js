@@ -14,7 +14,7 @@
  * 存疑时，判据必须跑在现网代码上。
  */
 const path = require('path');
-const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const GL = require(path.join(__dirname, '..', 'server', 'odds'));
 
 const arg = (k, d) => { const h = process.argv.find(a => a.startsWith('--' + k + '=')); return h ? h.slice(k.length + 3) : d; };
 const RTP = Number(arg('rtp', 0.90));

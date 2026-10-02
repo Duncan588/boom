@@ -65,7 +65,10 @@ console.log('  有 clamp：→ ' + CAP.toExponential(4));
 t('clamp 确实挡住了增长', CAP < j2);
 
 console.log('\n=== clamp 是否影响赔率（幂律不读 pool）===');
-var gl = fs.readFileSync(path.join(ROOT, 'server', 'game-logic.js'), 'utf8');
+// ⚠️ 目录化之后（2026-10-02）：decideRate 已从 server/game-logic.js 搬到
+//    server/odds/decide.js。读目录路径会 EISDIR / 读到不存在的文件，
+//    而这三条断言里两条会因此【静默变成恒真】—— 所以必须读真实文件。
+var gl = fs.readFileSync(path.join(ROOT, 'server', 'odds', 'decide.js'), 'utf8');
 var decide = gl.slice(gl.indexOf('function decideRate'));
 decide = decide.slice(0, decide.indexOf('\n}'));
 t('decideRate 不读 pool_balance', decide.indexOf('pool_balance') < 0);

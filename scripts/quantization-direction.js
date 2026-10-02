@@ -15,7 +15,7 @@
  * 用法：node scripts/quantization-direction.js --rtp=0.87 --cap=1000 --n=2000000
  */
 const path = require('path');
-const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const GL = require(path.join(__dirname, '..', 'server', 'odds'));
 const arg = (k, d) => { const h = process.argv.find(a => a.startsWith('--' + k + '=')); return h ? h.slice(k.length + 3) : d; };
 const RTP = Number(arg('rtp', 0.90));
 const CAP = Number(arg('cap', 1000));

@@ -7,8 +7,8 @@
 const crypto = require('crypto');
 const db = require('../db');
 const activities = require('../activities');
-const { round2 } = require('../game-logic');
-const jev = require('../jev');
+const { round2 } = require('../odds');
+const jev = require('../odds/jev');
 const { json, readBody, parseCookies, setCookie, clearCookie } = require('../http-util');
 
 const COOKIE = 'bd_admin';
@@ -277,7 +277,7 @@ function register(router) {
   router.get('/admin/api/odds-preview', (req, res) => {
     if (!requireAdmin(req, res)) return;
     const rounds = Math.min(50000, Math.max(100, Number(req.query.get('rounds')) || 10000));
-    const { simulate } = require('../game-logic');
+    const { simulate } = require('../odds');
     try {
       json(res, 200, { ok: true, ...simulate(db.allSettings(), rounds) });
     } catch (e) {
@@ -297,9 +297,9 @@ function register(router) {
     if (!requireAdmin(req, res)) return;
     const rounds = Math.min(50000, Math.max(100, Number(req.query.get('rounds')) || 2000));
     const cfg = db.allSettings();
-    const { decideRate } = require('../game-logic');
+    const { decideRate } = require('../odds');
     try {
-      const v3 = require('../v3/engine');
+      const v3 = require('../odds/v3/engine');
       v3.resetRange();
       const rates = [];
       for (let i = 0; i < rounds; i++) {
@@ -339,7 +339,7 @@ function register(router) {
   router.get('/admin/api/powerlaw-preview', (req, res) => {
     if (!requireAdmin(req, res)) return;
     const rounds = Math.min(200000, Math.max(1000, Number(req.query.get('rounds')) || 40000));
-    const gl = require('../game-logic');
+    const gl = require('../odds');
     try {
       const cfg = { ...db.allSettings() };
       if (req.query.get('rtp')) cfg.powerlaw_rtp = String(req.query.get('rtp'));
@@ -379,9 +379,9 @@ function register(router) {
       let rows;
       try { rows = JSON.parse(b.odds_table_json); }
       catch (_) { return json(res, 400, { error: '分布表格式错误，不是合法 JSON' }); }
-      // 校验逻辑只有一份：server/odds-validate.js
+      // 校验逻辑只有一份：server/odds/odds-validate.js
       // 前端也用同一套规则（内联副本），两边不会漂移。
-      const chk = require('../odds-validate').validateTable(rows);
+      const chk = require('../odds/odds-validate').validateTable(rows);
       if (!chk.ok) return json(res, 400, { error: chk.error });
     }
 
@@ -401,7 +401,7 @@ function register(router) {
      */
     let effect = null;
     if (b.odds_mode === '6' && b.odds_table_json) {
-      const gl = require('../game-logic');
+      const gl = require('../odds');
       effect = gl.simulate({
         ...db.allSettings(),
         odds_mode: '6',
@@ -416,7 +416,7 @@ function register(router) {
      * 请求体里缺省的键用库里现值才是真实配置。
      */
     if (b.odds_mode === '9') {
-      const gl = require('../game-logic');
+      const gl = require('../odds');
       effect = gl.powerlawReport(db.allSettings(), 20000);
     }
     json(res, 200, { ok: true, settings: db.allSettings(), effect });
@@ -590,7 +590,7 @@ function register(router) {
         hasKeyInSettings: !!key,
         hasEnvKey: !!process.env.TYPESAFE_API_KEY,
       },
-      personas: require('../jev-personas').PERSONAS,
+      personas: require('../odds/jev-personas').PERSONAS,
       status: jev.status(),
     });
   });

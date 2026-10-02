@@ -14,8 +14,8 @@
  * 例外：空房区间 [10,39] 是【客户需求写死的常量】，
  *       断言它不越界是断言需求被满足，不是断言随机结果。
  */
-const S = require('../server/shaped-rate.js');
-const GL = require('../server/game-logic.js');
+const S = require('../server/odds/shaped-rate.js');
+const GL = require('../server/odds');
 
 const N = 600_000;
 const IDLE_N = 20_000;

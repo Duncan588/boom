@@ -4,7 +4,7 @@
  */
 const WebSocket = require('ws');
 const path = require('path');
-const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const GL = require(path.join(__dirname, '..', 'server', 'odds'));
 
 const arg = (k, d) => {
   const hit = process.argv.find((a) => a.startsWith('--' + k + '='));

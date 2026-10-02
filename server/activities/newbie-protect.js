@@ -21,7 +21,7 @@
  * 参数（settings.activities_json）：
  *   { "newbie_protect": { "rounds": 3, "rtpBonus": 0.02 } }
  */
-const { POWERLAW } = require('../game-logic');
+const { POWERLAW } = require('../odds');
 
 module.exports = {
   id: 'newbie_protect',

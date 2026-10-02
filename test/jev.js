@@ -18,9 +18,9 @@ function t(name, fn) {
   catch (e) { console.log('  FAIL ' + name + '\n       ' + e.message); fail++; }
 }
 
-const jev = require('../server/jev');
-const { buildBands, fallbackBand, rateInBand } = require('../server/jev-bands');
-const { decideRate } = require('../server/game-logic');
+const jev = require('../server/odds/jev');
+const { buildBands, fallbackBand, rateInBand } = require('../server/odds/jev-bands');
+const { decideRate } = require('../server/odds');
 
 /** 十人房间，阈值覆盖六种个性 */
 const ROOM = [

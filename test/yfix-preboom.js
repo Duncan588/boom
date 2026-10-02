@@ -17,7 +17,7 @@
  */
 var path = require('path');
 var ROOT = path.join(__dirname, '..');
-var GL = require(path.join(ROOT, 'server', 'game-logic.js'));
+var GL = require(path.join(ROOT, 'server', 'odds'));
 
 var Y_FLOOR = 4.5, GH = 260, STEP = 100;
 function yFor(rate, yMax) {

@@ -1,6 +1,6 @@
 'use strict';
 /** 赔率引擎验证：窗口分布 + 限时活动 */
-const { decideRate, activeEvent, flightMs } = require('../server/game-logic');
+const { decideRate, activeEvent, flightMs } = require('../server/odds');
 
 const cfg = { odds_mode: '4', min_rate: 1.10, max_rate: 1000, band_min: 1.10, band_max: 3.00, base_random: 0.9 };
 

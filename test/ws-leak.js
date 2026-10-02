@@ -20,7 +20,7 @@
  */
 require('../server/env').load();
 const { WebSocket } = require('ws');
-const { flightMs, rateAt, CFG } = require('../server/game-logic');
+const { flightMs, rateAt, CFG } = require('../server/odds');
 const { Engine } = require('../server/engine');
 const db = require('../server/db');
 db.init();
@@ -114,7 +114,7 @@ function scan(msg, where, out) {
 
   // 直接驱动 playRound 太慢（真实一轮 ~15s+飞行），这里只验证消息结构：
   // 用真实的 decideRate + flightMs 走一遍起飞/结算的关键片段。
-  const { decideRate } = require('../server/game-logic');
+  const { decideRate } = require('../server/odds');
   // seedSettings 只在【键缺失】时写入，已有库不会得到新键 ——
   // 这正是 DEFAULT_SETTINGS 那条老规则的又一个例子，测试里必须自己兜底。
   db.seedSettings();

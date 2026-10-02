@@ -16,8 +16,8 @@
  *   node scripts/sim-event.js --mode=daily --rounds=100
  */
 const path = require('path');
-const { createEngine } = require(path.join(__dirname, '..', 'server', 'v3', 'engine'));
-const { flightMs } = require(path.join(__dirname, '..', 'server', 'game-logic'));
+const { createEngine } = require(path.join(__dirname, '..', 'server', 'odds', 'v3', 'engine'));
+const { flightMs } = require(path.join(__dirname, '..', 'server', 'odds'));
 
 const argv = {};
 for (const a of process.argv.slice(2)) {

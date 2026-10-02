@@ -1,6 +1,6 @@
 'use strict';
 /**
- * QA 独立对照模拟 —— 不复用 server/game-logic.js 的任何代码。
+ * QA 独立对照模拟 —— 不复用 server/odds/index.js 的任何代码。
  *
  * 【为什么要另写一份而不是直接 require 生产函数】
  * 我要验的是「数学性质是否成立」，不是「生产函数返回了什么」。

@@ -18,7 +18,7 @@
  *   ⑤ 冷场/连败的段长分布（必须是几何分布的尾巴，不是配额节拍）
  */
 const path = require('path');
-const GL = require(path.join(__dirname, '..', 'server', 'game-logic.js'));
+const GL = require(path.join(__dirname, '..', 'server', 'odds'));
 
 const arg = (k, d) => { const h = process.argv.find(a => a.startsWith('--' + k + '=')); return h ? h.slice(k.length + 3) : d; };
 
@@ -149,5 +149,5 @@ for (let i = 0; i < R; i++) { if (rates[i] < 1.10) { c1++; if (c1 > l1max) l1max
 console.log('   连续按不到逃跑按钮（<1.10x）最长 ' + l1max + ' 局，共 ' + rates.filter(x => x < 1.10).length + ' 局');
 
 console.log('\n' + '='.repeat(74));
-console.log('服务器状态：本脚本只 import server/game-logic.js，不连数据库、不开端口、不改任何文件。');
+console.log('服务器状态：本脚本只 import server/odds/index.js，不连数据库、不开端口、不改任何文件。');
 console.log('='.repeat(74));

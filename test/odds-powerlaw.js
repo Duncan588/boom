@@ -19,7 +19,7 @@
  * 又不会在纯采样噪声下随机红。floor 取整带来的系统性偏低在最靠近 cap 的
  * m=100 处约 −1%，也在这个带内。
  */
-const G = require('../server/game-logic');
+const G = require('../server/odds');
 const { powerlawRate, payout, normRtp, POWERLAW } = G;
 
 const N = 1_000_000;

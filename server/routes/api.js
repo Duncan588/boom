@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const db = require('../db');
 const { daily } = require('../daily-activity');
-const { CFG, round2 } = require('../game-logic');
+const { CFG, round2 } = require('../odds');
 const da = require('../discord-auth');
 const admin = require('./admin');
 const { json, readBody, parseCookies, setCookie, clearCookie, safeEqual } = require('../http-util');

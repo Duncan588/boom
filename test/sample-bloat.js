@@ -135,7 +135,7 @@ console.log('\n=== 不同帧率下都成立（30fps / 60fps / 120fps）===');
 });
 
 console.log('\n=== 保留的上限仍然够（不能为了修膨胀又截断长局）===');
-var GL = require(path.join(ROOT, 'server', 'game-logic.js'));
+var GL = require(path.join(ROOT, 'server', 'odds'));
 var capTicks = Math.ceil(GL.flightMs(1000) / 100);
 var S2 = play(1000, 60);
 t('1000x 局（' + capTicks + ' tick）不撞上限：' + S2.length + ' < 1400', S2.length < 1400);

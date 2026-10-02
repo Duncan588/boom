@@ -15,7 +15,7 @@
 const path = require('path');
 const fs = require('fs');
 const { fallbackRate, normRange, normShape, buildZones, clamp, round2 } =
-  require(path.join(__dirname, '..', 'server', 'jev-rate'));
+  require(path.join(__dirname, '..', 'server', 'odds', 'jev-rate'));
 
 const argv = {};
 for (const a of process.argv.slice(2)) {

@@ -13,7 +13,7 @@
  */
 var fs = require('fs'), path = require('path');
 var ROOT = path.join(__dirname, '..');
-var GL = require(path.join(ROOT, 'server', 'game-logic.js'));
+var GL = require(path.join(ROOT, 'server', 'odds'));
 
 var pass = 0, fail = 0;
 function t(name, cond, extra) {

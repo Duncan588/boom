@@ -23,7 +23,7 @@ const fs = require('fs');
 const db = require('../server/db');
 db.init();
 const acts = require('../server/activities');
-const { POWERLAW } = require('../server/game-logic');
+const { POWERLAW } = require('../server/odds');
 
 let pass = 0, fail = 0;
 const ok = (c, m, extra) => {
@@ -170,7 +170,7 @@ const hookCtx = acts.runHooks('onRoundBegin', { powerlawRtp: 0.97 });
 ok(!('seated' in hookCtx) && !('profiles' in hookCtx),
   '活动钩子不会把玩家档案塞进 ctx', Object.keys(hookCtx).join(','));
 // jev 在幂律下完全不参与
-const jev = require('../server/jev');
+const jev = require('../server/odds/jev');
 ok(typeof jev.pickBand === 'function', 'jev 模块仍可加载（mode 7 保留可用）');
 const engineSrc2 = engineSrc;
 ok(/const mode7Active = mode7 && !powerlaw;/.test(engineSrc2),
@@ -189,7 +189,7 @@ ok(leaks.length === 0, 'jev 不外发任何身份数据（discord_id/昵称/头�
 ok(/median_escape_target/.test(jevSrc) && /losing_streaks/.test(jevSrc),
   '（文档）jev 外发的是行为画像：逃跑倍率中位数与连败次数 —— 属隐私风险，但幂律下不发');
 // 幂律路径绝不触碰 jev
-const powerlawDecide = require('../server/game-logic').powerlawDecide;
+const powerlawDecide = require('../server/odds').powerlawDecide;
 const dec = powerlawDecide({ powerlaw_rtp: '0.97', powerlaw_cap: '120' }, null);
 ok(dec.mode === '9-powerlaw' && !dec.jev, '幂律决策结果里没有任何 jev 字段', JSON.stringify(dec));
 

@@ -6,9 +6,9 @@
  * 这条挂了意味着玩家点逃跑时屏幕显示一个倍率、实际按另一个倍率赔付 ——
  * 直接的资金错误。
  */
-const GL = require('../server/game-logic');
+const GL = require('../server/odds');
 const { flightMs, rateAt } = GL;
-const v3 = require('../server/v3/engine');
+const v3 = require('../server/odds/v3/engine');
 
 let pass = 0, fail = 0;
 function t(name, ok, got) {

@@ -7,7 +7,7 @@
  * 随机算法不能断言具体值，但可以断言分布和边界性质。
  */
 const path = require('path');
-const E = require(path.join(__dirname, '..', 'server', 'v2', 'engine'));
+const E = require(path.join(__dirname, '..', 'server', 'odds', 'v2', 'engine'));
 
 let pass = 0, fail = 0;
 function t(name, ok, extra) {

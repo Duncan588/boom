@@ -5,8 +5,8 @@ TypeSafe System One（模型 `jev-latest` / `jev-1.13`）在起飞时刻替管�
 完全一致，不做任何按人差异化的赔付。Jev 只决定「这一局落在哪一段」，段内具体
 倍率由代码 `Math.random()` 取。
 
-代码：[`server/jev.js`](server/jev.js)、[`server/jev-bands.js`](server/jev-bands.js)、
-[`server/jev-personas.js`](server/jev-personas.js)、[`test/jev.js`](test/jev.js)、
+代码：[`server/odds/jev.js`](server/odds/jev.js)、[`server/odds/jev-bands.js`](server/odds/jev-bands.js)、
+[`server/odds/jev-personas.js`](server/odds/jev-personas.js)、[`test/jev.js`](test/jev.js)、
 模拟器 [`scripts/sim-jev.mjs`](scripts/sim-jev.mjs)。
 
 ---

@@ -9,10 +9,10 @@
  *   4. 按赔率飞行 flightMs(rate) → 期间玩家可点击逃跑
  *   5. 广播 {type:'over', gid, boom:rate}，未逃跑者判负
  */
-const { CFG, FLIGHT_SCALE, flightMs, rateAt, payout, decideRate, activeEvent, round2, sleep } = require('./game-logic');
+const { CFG, FLIGHT_SCALE, flightMs, rateAt, payout, decideRate, activeEvent, round2, sleep } = require('./odds');
 const { runHooks } = require('./activities');
 const db = require('./db');
-const jev = require('./jev');
+const jev = require('./odds/jev');
 /**
  * 【2026-10-02】奖池 / 资金池上限 = 1000 亿（客户要的「稳定 100B」量级）。
  *
