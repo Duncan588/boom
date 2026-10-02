@@ -17,7 +17,7 @@
  *
  * 【加法而非乘法】RTP + bonus（默认 +0.03），最终硬 clamp 到 1.00。
  * 保本线其实是 RTP = 1/0.97 = 1.0309，所以 1.00 仍留 3 个百分点余量；
- * 超过 1.0309 才是给所有人保证盈利（见 game-logic.js 的 POWERLAW.RTP_MAX）。
+ * 超过 1.0309 才是给所有人保证盈利（见 server/odds/powerlaw.js 的 POWERLAW.RTP_MAX）。
  *
  * 【非幂律模式】仍返回 maxRateOverride，由 engine 抬 max_rate，
  * 行为与改动前一致 —— 只是它现在终于会真的生效了

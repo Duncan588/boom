@@ -17,7 +17,7 @@
  *   这样重命名子模块时只需改这一处。子模块仍各自导出，供本目录内与测试使用。
  */
 
-// 本文件由 scripts/tmp-odds-migrate.js 从原 server/game-logic.js 按行号区间原样切出。
+// 本文件的算法代码是从原 server/game-logic.js 按行号区间原样切出的（2026-10-02 目录化）。
 // 【不要手改算法】要改行为请改这里再重跑 node --check server/odds/*.js + test/odds-invariants.js
 
 const flight = require('./flight-curve');

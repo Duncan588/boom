@@ -198,7 +198,7 @@ function getUserById(id) {
   return get().prepare('SELECT * FROM users WHERE id = ?').get(id) || null;
 }
 
-/** 保留两位小数（避免浮点误差进账）。db.js 内部自持，不依赖 game-logic。 */
+/** 保留两位小数（避免浮点误差进账）。db.js 内部自持，不依赖 server/odds。 */
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
 }

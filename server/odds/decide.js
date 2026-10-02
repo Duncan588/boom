@@ -12,7 +12,7 @@
  * 幂律（mode 9/默认，见 powerlaw.js）。mode 7/8 的代码在同目录保留但已不接线路径。
  */
 
-// 本文件由 scripts/tmp-odds-migrate.js 从原 server/game-logic.js 按行号区间原样切出。
+// 本文件的算法代码是从原 server/game-logic.js 按行号区间原样切出的（2026-10-02 目录化）。
 // 【不要手改算法】要改行为请改这里再重跑 node --check server/odds/*.js + test/odds-invariants.js
 
 const { shapedDecide } = require('./shaped-rate');

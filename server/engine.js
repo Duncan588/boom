@@ -227,7 +227,7 @@ class Engine {
     /**
      * 【2026-09-30】幂律模式下活动通过 rtpOverride 调整返还率。
      *
-     * 钳制做在 engine 这一层【和】game-logic 的 normRtp 里各一次：
+     * 钳制做在 engine 这一层【和】server/odds 的 normRtp 里各一次：
      * 前者是「活动不许把 RTP 顶到 1.00 以上」，后者是「任何来源的 RTP
      * 都在 [0.80, 1.00]」。只在一处钳制的话，绕开另一处就能配出 RTP>1。
      * 本局内不再变动：cfg 是本局开始时的快照，抽爆点只发生一次。
@@ -364,12 +364,12 @@ class Engine {
      * 副作用很严重：显示 1000x 但只飞 120 秒 —— 玩家看到千倍结果只等了 2 分钟，
      * 觉得被骗；而且高倍局的【显示时长与结算时长不一致】。
      *
-     * 现在 game-logic.js 加入了高倍加速曲线（100x = 73.8s，1000x = 100s，
+     * 现在 server/odds/flight-curve.js 加入了高倍加速曲线（100x = 73.8s，1000x = 100s，
      * 10000x 也只有 112.6s），最慢的一局就是 100x 的 73.8 秒，
      * 天然低于原来的 120 秒上限 —— 所以上限已经没有任何存在必要。
      *
      * ⚠️ 若这里再钳一次，会重新引入「显示倍率与实际时长不符」的 bug。
-     *    game-logic 的加速曲线已用指数收敛兜底，无论 max_rate 配多大都不会飞超时。
+     *    server/odds 的加速曲线已用指数收敛兜底，无论 max_rate 配多大都不会飞超时。
      */
     const ms = flightMs(rate, { instant: dec.fast });
     db.get().prepare('UPDATE rounds SET rate = ? WHERE id = ?').run(rate, roundId);

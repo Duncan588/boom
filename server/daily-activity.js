@@ -36,7 +36,7 @@ const CFG_DEFAULT = {
   /**
    * 【2026-09-30 新增】幂律（mode 9）下活动期的 RTP 加成。
    * 默认 +0.03，引擎硬 clamp 到 RTP ≤ 1.00（超过就是给所有人保证盈利）。
-   * 上限见 game-logic.js 的 POWERLAW.EVENT_BONUS_MAX = 0.20。
+   * 上限见 server/odds/powerlaw.js 的 POWERLAW.EVENT_BONUS_MAX = 0.20。
    */
   rtp_bonus: '0.03',
   width: '1.8',            // v3 采样邻域宽度（对数）
@@ -261,7 +261,7 @@ class DailyHighRate {
       max: c.max,
       weight: c.weight,
       // 【2026-09-30】幂律（mode 9）下活动期唯一生效的字段。
-      // 加法幅度，默认 0.03（见 game-logic.js 的 POWERLAW.EVENT_BONUS_DEFAULT），
+      // 加法幅度，默认 0.03（见 server/odds/powerlaw.js 的 POWERLAW.EVENT_BONUS_DEFAULT），
       // 最终 RTP 硬 clamp 到 1.00。
       // ⚠️ 非幂律模式下这个字段不被读取 —— 那些模式仍走 v3 的 min/max/boom_rate。
       rtp_bonus: c.rtpBonus,

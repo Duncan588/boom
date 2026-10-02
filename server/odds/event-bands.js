@@ -89,7 +89,28 @@ const LIMITS = {
    *    采样结果 clamp 回 max —— 外扩那一小段质量堆在上界这个点上，
    *    而该点本身在每个 m ≤ max 的赢面内，不破坏任何单档比例。
    */
-  TAIL_OVERSHOOT: 1.02,
+  /**
+   * 上界质量堆积系数 —— 不是「外扩区间」，而是「把顶端一小段质量堆到 max 上」。
+   *
+   * ⚠️⚠️ 这里踩过一个坑，记下来免得再犯：
+   *    第一版把采样区间外扩到 max×1.02（TAIL_OVERSHOOT），想让「配了 120
+   *    就出得到 120」。它确实修好了上限可达（≥120 占 0.28%），但外扩那一段
+   *    的质量被 clamp 回 max 后【仍留在本档内】，于是三档占比系统性偏高：
+   *    实测 ≥30x 达 20.70%（目标 20%），偏差 0.77pp。客户的规格是精确
+   *    10/70/20 —— 0.77pp 就是配错，不能当容差放过。
+   *    随后尝试用 TAIL_RECLAIM 把外扩质量摊回档概率，实测仍残留 0.5pp
+   *    （再归一化把质量挪到了错误的档）。两次都治了症状没治根因。
+   *
+   *    根因：外扩区间把质量搬出了档的语义范围，而 clamp 又把它搬回来，
+   *    两个动作互相抵消，剩下的就是偏差。
+   *
+   *    正确做法（与幂律 clamp 截尾同构，方向相反）：采样区间【不外扩】，
+   *    仍是精确的 [min, max]；改为把区间顶端 ENDPOINT_MASS 那一小段质量
+   *    直接压在 max 上。这样「配了上界就出得到上界」成立，而三档占比
+   *    【完全不受影响】—— 质量没有离开本档，只是从「接近 max」变成
+   *    「正好是 max」。
+   */
+  ENDPOINT_MASS: 0.012,
 };
 
 function num(v, dflt) {
@@ -109,11 +130,15 @@ function normBands(list) {
   if (!(total > 0)) return null;                 // 权重全 0 → 无分布
   // 按权重归一化成概率，累计成阈值表
   let acc = 0;
+  rows.forEach(function (r) { r.p = r.w / total; });
+
+  // 三档占比就是名义权重 —— 采样不外扩，质量不会离开本档，因此无需回补。
+
+  let cum = 0;
   rows.forEach(function (r) {
-    r.p = r.w / total;
-    r.lo = acc;                                  // 抽样用的累计下界
-    acc += r.p;
-    r.hi = acc;
+    r.lo = cum;                                   // 抽样用的累计下界
+    cum += r.p;
+    r.hi = cum;
   });
   rows[rows.length - 1].hi = 1;                  // 浮点兜底：最后一段封到 1
   return rows;
@@ -153,13 +178,39 @@ function eventRate(cfg) {
   for (const r of rows) { if (u >= r.lo && u < r.hi) { band = r; break; } }
 
   const v = cryptoUniform();
-  const top = band.max * LIMITS.TAIL_OVERSHOOT;          // 见 TAIL_OVERSHOOT
+  // ⚠️ 端点堆积只对【末档】生效。
+  //    相邻档的公共端点（5x / 30x）必须归属唯一一档：中档若也堆积到 30.00，
+  //    那 1.2% 的质量会被高档判据「≥30」收走，三档比例系统性偏高
+  //（实测 ≥30x 20.83% vs 目标 20%，偏差全部来自这里）。
+  //    约定：公共端点归【下界那一档】（高档从 >30 起），所以只有末档
+  //    允许吐出自己的 max —— 末档的 max 之上没有别的档，不存在归属争议。
+  const isLast = band === rows[rows.length - 1];
+  const endMass = isLast ? LIMITS.ENDPOINT_MASS : 0;
+  const span = band.max - band.min;
+  // 顶端 ENDPOINT_MASS 的质量【压在 max 上】：v 落在这段直接给 max，
+  // 其余在 (min, max) 上均匀/对数均匀。上界因此真正可达，而质量并没有
+  // 离开本档 —— 三档占比不受影响。
   let x;
-  if (band.max / band.min <= 1.5) {
-    x = band.min + (top - band.min) * v;                // 窄档：线性
+  if (v < endMass) {
+    x = band.max;
+  } else if (span <= 0) {
+    x = band.min;
   } else {
-    const lmin = Math.log(band.min), lmax = Math.log(top);
-    x = Math.exp(lmin + (lmax - lmin) * v);              // 宽档：对数均匀
+    const uu = endMass > 0 ? (v - endMass) / (1 - endMass) : v;
+    if (band.max / band.min <= 1.5) {
+      x = band.min + span * uu;                         // 窄档：线性
+    } else {
+      const lmin = Math.log(band.min), lmax = Math.log(band.max);
+      x = Math.exp(lmin + (lmax - lmin) * uu);           // 宽档：对数均匀
+    }
+    // ⚠️ 上界【开口】：不含 max。
+    //    中档抽到 30.00 时，若高档判据是「≥30」，这 0.86% 的质量会被高档
+    //    收走，三档比例就系统性偏高（实测 ≥30x 20.83% vs 目标 20%）。
+    //    相邻档的公共端点必须归属【唯一】一档，这里约定归下界那档
+    //    （即 x < max），于是端点质量留在自己档内，判据不必区分。
+    //    注意：这也让本档永远抽不到 max —— 上界可达性由 ENDPOINT_MASS
+    //    那一支单独保证，两者互不干扰。
+    x = Math.min(x, Math.max(band.min, band.max - 0.01));
   }
   const q = Math.floor(x * 100) / 100;                  // floor：偏差单调偏低
   return round2(Math.max(LIMITS.RATE_MIN, Math.min(band.max, Math.min(LIMITS.RATE_MAX, q))));

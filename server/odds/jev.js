@@ -54,7 +54,7 @@ function configure(cfg) {
   state.persona = (cfg.jev_persona === 'bodhisattva') ? 'bodhisattva' : 'standard';
   state.sampleRate = Math.max(0, Math.min(100, Number(cfg.jev_sample_rate ?? 100)));
   // ⚠️ 这里【没有】活动配置。活动参数由 decideRate 从 activeEvent() 拿到的
-  //    ev 事件传入（见 game-logic.js mode 7 分支）。
+  //    ev 事件传入（见 server/odds/decide.js）。
   //    早先这里读 jev_act_enabled / jev_act_rounds / jev_act_max / jev_act_instant
   //    四个 setting，结果与「每日高倍活动」那套 events_json 打架：
   //    同一时刻两套活动上限，谁生效说不清。已删除，配置只留「每日高倍活动」一处。
@@ -69,7 +69,7 @@ function configure(cfg) {
  *    同一时刻存在两套活动上限，谁生效说不清；而且 roundsLeft 那个扣减机制
  *    还引入了「一局扣两次」的真 bug。
  *
- * 现在活动只有一个来源：decideRate 拿到的 ev 事件（见 game-logic.js mode 7）。
+ * 现在活动只有一个来源：decideRate 拿到的 ev 事件（见 server/odds/decide.js）。
  * 活动时段本身由 daily-activity.js 调度，Jev 只在那一小时里切菩萨 + 限倍率。
  */
 

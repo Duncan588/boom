@@ -7,7 +7,7 @@
  * ⚠️ toMinutes 必须接受 "24:00"（= 1440），半开区间会让最后一小时不可达。
  */
 
-// 本文件由 scripts/tmp-odds-migrate.js 从原 server/game-logic.js 按行号区间原样切出。
+// 本文件的算法代码是从原 server/game-logic.js 按行号区间原样切出的（2026-10-02 目录化）。
 // 【不要手改算法】要改行为请改这里再重跑 node --check server/odds/*.js + test/odds-invariants.js
 
 /**

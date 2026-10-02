@@ -11,7 +11,7 @@
  *   test/flight-curve.js 做往返断言（误差必须为 0）。
  */
 
-// 本文件由 scripts/tmp-odds-migrate.js 从原 server/game-logic.js 按行号区间原样切出。
+// 本文件的算法代码是从原 server/game-logic.js 按行号区间原样切出的（2026-10-02 目录化）。
 // 【不要手改算法】要改行为请改这里再重跑 node --check server/odds/*.js + test/odds-invariants.js
 
 const CFG = {
