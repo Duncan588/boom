@@ -1398,6 +1398,11 @@
     window.addEventListener('touchmove', function (e) {
       var t = e.touches && e.touches[0];
       if (!t) return;
+      // ⚠️【2026-10-04 修手机页无法上滑】preventDefault 只能在【正在拖滑块】时执行。
+      //    之前放在 onMove 之前无条件执行：手指在玩家列表/聊天/页面任何位置滑动
+      //    都被它拦掉，移动端整页无法滚动 —— 这正是弹幕输入框移下来后出现的报告。
+      //    onMove 内部「先判 dragging 再做事」的逻辑保留不变，只是把拦截收窄。
+      if (!dragging) return;
       if (e.cancelable) e.preventDefault();
       onMove(t.clientX, e);
     }, { passive: false });

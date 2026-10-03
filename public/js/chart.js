@@ -54,6 +54,7 @@
     this.c.width = Math.round(r.width * this.dpr);
     this.c.height = Math.round(r.height * this.dpr);
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this._fontFam = getComputedStyle(document.body).fontFamily;
     this.draw();
   };
 
@@ -93,7 +94,9 @@
     var ctx = this.ctx, w = this.w, h = this.h;
     if (!w || !h) return;
 
-    var fam = getComputedStyle(document.body).fontFamily;
+    // ⚠️【2026-10-04 修「网格动画一卡一卡」】getComputedStyle 每帧调用会强制样式重算，
+    //    60fps 下把主线程打满。字体族在一次会话里不会变 —— 读一次缓存，resize 时刷新。
+    var fam = this._fontFam || (this._fontFam = getComputedStyle(document.body).fontFamily);
     var i;
 
     // grid: top 15% / left 3% / right 4% / bottom 5%（containLabel → 左侧留字宽）
@@ -194,8 +197,10 @@
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.shadowColor = this.status === 'over' ? 'rgba(237,66,69,.45)' : 'rgba(100,149,237,.4)';
-    ctx.shadowBlur = 10;
+    // ⚠️【2026-10-04 性能】shadowBlur 在移动端 canvas 上每帧全曲线重投影，是掉帧大头。
+    //    飞行中曲线不加阴影（视觉差异极小），只在 over 爆点标记上保留发光。
+    if (this.status === 'over') { ctx.shadowColor = 'rgba(237,66,69,.45)'; ctx.shadowBlur = 10; }
+    else { ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; }
     ctx.beginPath();
     for (i = 0; i < S.length; i++) {
       var px = xFor(S[i].sec), py = yFor(S[i].rate);
